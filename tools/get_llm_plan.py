@@ -28,7 +28,7 @@ def get_llm_plan(scene_data_folder, splits=["train", "test"], prompt_num_limit=5
         if not os.path.exists(edit_folder_path):
             print(f"Edit data folder {edit_folder_path} does not exist.")
             continue
-        
+
         command_file = os.path.join(scene_data_folder, f"batch_llm_command_{split}.json")
         if not os.path.exists(command_file):
             print(f"Command file {command_file} does not exist.")
@@ -51,14 +51,14 @@ def get_llm_plan(scene_data_folder, splits=["train", "test"], prompt_num_limit=5
             assert hasattr(target_scene, "command"), f"Scene {scene_id} does not have command, which should not happen."
             source_scene_id = target_scene.original_id
             source_scene = scenes_dataset[uid_to_scene_index[source_scene_id]]
-        
+
             natural_command = command_data[scene_id]
             if type(natural_command) == list:
                 natural_command = natural_command[0]
 
             message = construct_plan_prompt(source_scene, natural_command, class_labels)
             batch_prompts.append(construct_batch_element(message, scene_id))
-        
+
         if len(batch_prompts) > prompt_num_limit:
             part_number = math.ceil(len(batch_prompts) / prompt_num_limit)
             part_size = len(batch_prompts) // part_number
@@ -84,11 +84,11 @@ def get_llm_plan(scene_data_folder, splits=["train", "test"], prompt_num_limit=5
 def encode_image(image_path):
   with open(image_path, "rb") as image_file:
     return base64.b64encode(image_file.read()).decode('utf-8')
-  
+
 def construct_plan_prompt(source_scene, instruction, class_labels, use_image=False):
 
     scene_description = source_scene.get_room_description()
-    
+
     system_prompt = "Imagine you are a indoor room designer and you are using provided API to control the 3D models in the scene.\n" + \
         "Given one scene configuration and a command to edit the scene, you should use the provided APIs to do planning and achieve the target.\n" + \
         "All sizes and centroids in scene configurations are in meters. The angles are defined in degrees. The dimension sequence is [x,y,z]. Vertical angles are the angles along the y-axis.\n"+ \
@@ -128,12 +128,12 @@ def construct_plan_prompt(source_scene, instruction, class_labels, use_image=Fal
         "3. If you want to remove a chair, you should use the format: ['Remove', 'chair'].\n" + \
         "4. If you want to replace a metal chair with a wooden one and this chair on the left of the bed with wooden design, you should use the format: ['Replace', 'the chair is metal', 'the chair is wooden', ('left', 'the bed is wooden')].\n\n" + \
         "Think about it step by step. Summarize the used apis at the end by lines. The final output format should be ***[api 1, api 2, ...]***.\n"
-    
+
     prompt = "[Scene configurations]:\n" + scene_description + "\n" + \
         "[Command]:" + json.dumps(instruction) + "\n\n" + \
         "If there are multiple relative descriptions for one API, you should select the closest one.\n" + \
         "Checkout at the end to make sure output the final plan in the format of ***[api 1, api 2, ...]***.\n"
-    
+
     if use_image:
         source_scene.get_blender_render("/tmp/blender_render", camera_dist=1.2, num_images=2, verbose=False)
         content = []
@@ -169,7 +169,7 @@ def construct_plan_prompt(source_scene, instruction, class_labels, use_image=Fal
                 "content": content
             }
         ],
-        "max_tokens": 2048
+        "max_tokens": 4096
     }
     return message
 
@@ -192,7 +192,7 @@ def process_llm_plan(response_data_file, prompt_data_file):
             custom_id = data['custom_id']
             response = data["response"]['body']['choices'][0]['message']['content']
             all_data[custom_id] = response
-    
+
     all_prompts = {}
     with open(prompt_data_file, 'r') as f:
         lines = f.readlines()
@@ -210,7 +210,7 @@ def process_llm_plan(response_data_file, prompt_data_file):
     if os.path.exists(save_path):
         with open(save_path, 'r') as f:
             processed_all_data = json.load(f)
-    
+
     model_id = "meta-llama/Llama-3.1-8B-Instruct"
     pipeline = transformers.pipeline("text-generation", model=model_id, model_kwargs={"attn_implementation":"flash_attention_2", "torch_dtype": torch.bfloat16}, device_map="auto")
     messages = [
@@ -238,7 +238,7 @@ def process_llm_plan(response_data_file, prompt_data_file):
                 print(f"Failed to get a valid plan for {uid}. We will skip this scene.")
                 continue
             processed_all_data[uid] = react
-    
+
     with open(save_path, 'w') as f:
         json.dump(processed_all_data, f, indent=4)
 
@@ -267,7 +267,7 @@ def reflect_invalid_command(command, fail_reason, proccessed_command, prompts, p
         messages = {
             "model": "gpt-4o",
             "messages": prompts,
-            "max_tokens": 2048
+            "max_tokens": 4096
         }
 
         new_command = call_openai_api(messages)
@@ -280,7 +280,7 @@ def reflect_invalid_command(command, fail_reason, proccessed_command, prompts, p
         else:
             command = new_command
             fail_reason = react
-    
+
     return None
 
 
@@ -295,7 +295,7 @@ def check_response_valid(command, pipeline, messages, terminators):
         valid_response = ast.literal_eval(valid_response)
     except Exception as e:
         return False, str(e), None
-    
+
     # 2. Check if the response is a list
     if not isinstance(valid_response, list):
         return False, "The response is not a list", valid_response
@@ -305,7 +305,7 @@ def check_response_valid(command, pipeline, messages, terminators):
             valid_response = [valid_response]
         else:
             return False, "The first element of the response is not a valid action", valid_response
-    
+
     # 3. Check if the response follows the format
     instructions = []
     for item in valid_response:
@@ -328,12 +328,12 @@ def convert_single_plan(plan):
             relative = "in front of"
         else:
             relative = direction
-        
+
         if "closely" in direction and not "closely" in relative:
             relative = "closely " + relative
-        
+
         return f"location: ***{relative}*** {target}"
-            
+
     if plan[0] == "add":
         assert len(plan) == 3, "The add plan should have 3 elements"
         target = plan[1]
@@ -428,12 +428,12 @@ def convert_single_plan(plan):
     return instruction
 
 def call_openai_api(message, retries=3):
-    
+
     headers = {
     "Content-Type": "application/json",
     "Authorization": f"Bearer {api_key}"
     }
-    
+
     for i in range(retries):
         response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=message)
         response = response.json()
@@ -485,7 +485,7 @@ if __name__ == '__main__':
             scene_data_folder = os.path.join(EDIT_DATA_FOLDER, config['filter_fn'])
             if not os.path.exists(scene_data_folder):
                 raise FileNotFoundError(f"Edit data folder {scene_data_folder} does not exist. Please run edit_data_generator.py first.")
-            
+
             prompt_files = get_llm_plan(scene_data_folder, splits=args.splits)
             if len(prompt_files) == 0:
                 print(f"No data found for {room_type}.")
@@ -513,7 +513,6 @@ if __name__ == '__main__':
                 response_save_path = os.path.join(scene_data_folder, f"{file_name.split('.')[0]}_response.jsonl")
                 with open(response_save_path, "wb") as f:
                     f.write(response.content)
-                
+
                 process_llm_plan(response_save_path, file_name)
                 print(f"Processed {file_name} and saved to {response_save_path}")
-        
