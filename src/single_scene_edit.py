@@ -5,7 +5,6 @@ This module provides functionality for editing individual 3D room scenes using
 AI models and LLM-based command processing. It supports natural language commands
 for manipulating furniture objects within room scenes.
 
-Key features:
 - Load and visualize base room scenes
 - Process natural language editing commands via LLM
 - Generate edited scenes with collision detection
@@ -64,24 +63,29 @@ from utils.util import construct_scene_from_vq_objdata, get_blender_render, rend
 from utils.visualize import export_scene
 
 # Constants for magic numbers
+# Import shared constants from tools.constants  
+from tools.constants import (
+    API_RETRY_COUNT,
+    ANGLE_THRESHOLD_OBVIOUS,
+    ANGLE_THRESHOLD_SLIGHT, 
+    SCALE_THRESHOLD_OBVIOUS_UP,
+    SCALE_THRESHOLD_OBVIOUS_DOWN,
+    DISTANCE_THRESHOLD_OBVIOUS,
+    DISTANCE_THRESHOLD_SLIGHT,
+    MAX_COLLISION_RESOLUTION_ATTEMPTS,
+    COLLISION_SEPARATION_FACTOR,
+    COLLISION_SAFETY_MARGIN,
+    DEFAULT_ZERO_ANGLE
+)
+
+# Single scene edit specific constants
 MAX_COLLISION_DISPLAY = 3
 MAX_FILE_MATCHES_DISPLAY = 5
 DEFAULT_CAMERA_DISTANCE = 1.2
-API_RETRY_COUNT = 3
 MAX_TOKENS = 2048
-ANGLE_THRESHOLD_OBVIOUS = 135
-ANGLE_THRESHOLD_SLIGHT = 45
-SCALE_THRESHOLD_OBVIOUS_UP = 1.3
-SCALE_THRESHOLD_OBVIOUS_DOWN = 0.7
-MAX_COLLISION_RESOLUTION_ATTEMPTS = 100
 COORDINATE_NORMALIZATION_THRESHOLD = 1.0
-DISTANCE_THRESHOLD_OBVIOUS = 1.0
-DISTANCE_THRESHOLD_SLIGHT = 0.5
-COLLISION_SEPARATION_FACTOR = 0.6
-COLLISION_SAFETY_MARGIN = 0.1
 COMMAND_PREVIEW_LENGTH = 50
 STRING_PREVIEW_LENGTH = 100
-DEFAULT_ZERO_ANGLE = 0.0
 
 # Configuration constants
 DEFAULT_SEED = 42
@@ -814,10 +818,7 @@ def construct_plan_prompt(source_scene, instruction, class_labels, use_image=Fal
     return message
 
 
-# call_llm_api function now imported from tools.utils
 
-
-# convert_single_plan function now imported from tools.utils
 
 
 def process_command(scene_data, command, class_labels):

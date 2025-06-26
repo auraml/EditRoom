@@ -12,14 +12,16 @@ import requests
 import time
 from openai import OpenAI
 
-# Constants for improved functions (from single_scene_edit.py)
-DISTANCE_THRESHOLD_OBVIOUS = 1.0
-DISTANCE_THRESHOLD_SLIGHT = 0.5
-ANGLE_THRESHOLD_OBVIOUS = 135
-ANGLE_THRESHOLD_SLIGHT = 45
-SCALE_THRESHOLD_OBVIOUS_UP = 1.3
-SCALE_THRESHOLD_OBVIOUS_DOWN = 0.7
-API_RETRY_COUNT = 3
+# Import constants from dedicated constants file
+from tools.constants import (
+    DISTANCE_THRESHOLD_OBVIOUS,
+    DISTANCE_THRESHOLD_SLIGHT,
+    ANGLE_THRESHOLD_OBVIOUS,
+    ANGLE_THRESHOLD_SLIGHT,
+    SCALE_THRESHOLD_OBVIOUS_UP,
+    SCALE_THRESHOLD_OBVIOUS_DOWN,
+    API_RETRY_COUNT
+)
 
 def preprocess_edits(dataset, obj_dataset, num_max_pre_room = 10):
     # add modified scenes of object replace and pose change operations to the original scene list, record numbers    
