@@ -8,7 +8,18 @@ from numpy import ndarray
 from shapely.geometry import Polygon, Point
 import math
 import re
+import requests
+import time
 from openai import OpenAI
+
+# Constants for improved functions (from single_scene_edit.py)
+DISTANCE_THRESHOLD_OBVIOUS = 1.0
+DISTANCE_THRESHOLD_SLIGHT = 0.5
+ANGLE_THRESHOLD_OBVIOUS = 135
+ANGLE_THRESHOLD_SLIGHT = 45
+SCALE_THRESHOLD_OBVIOUS_UP = 1.3
+SCALE_THRESHOLD_OBVIOUS_DOWN = 0.7
+API_RETRY_COUNT = 3
 
 def preprocess_edits(dataset, obj_dataset, num_max_pre_room = 10):
     # add modified scenes of object replace and pose change operations to the original scene list, record numbers    
@@ -505,3 +516,154 @@ def retrieve_batch_response(path_to_id, openai_api_key):
             content = None
         file_to_content[file] = content
     return file_to_content
+
+def convert_single_plan(plan):
+    """
+    Converts single plan to instruction format.
+    Enhanced version with better error handling and named constants.
+    """
+    def add_relative(relative):
+        direction = relative[0]
+        target = relative[1]
+        if "right" in direction:
+            relative = "right of"
+        elif "left" in direction:
+            relative = "left of"
+        elif "front" in direction:
+            relative = "in front of"
+        else:
+            relative = direction
+
+        if "closely" in direction and not "closely" in relative:
+            relative = "closely " + relative
+
+        return f"location: ***{relative}*** {target}"
+
+    if plan[0] == "add":
+        assert len(plan) == 3, "The add plan should have 3 elements"
+        target = plan[1]
+        relative = plan[2]
+        # Handle both tuple and list formats for relative descriptions
+        if isinstance(relative, (list, tuple)) and len(relative) == 2:
+            relative_des = add_relative(relative)
+            instruction = f"add object: {target}; {relative_des}."
+        else:
+            instruction = f"add object: {target}."
+    elif plan[0] == "remove":
+        assert len(plan) in [2, 3], "The remove plan should have 2 or 3 elements"
+        target = plan[1]
+        if len(plan) == 3:
+            relative = plan[2]
+            # Handle both tuple and list formats for relative descriptions
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction = f"remove object: {target}; {relative_des}."
+            else:
+                instruction = f"remove object: {target}."
+        else:
+            instruction = f"remove object: {target}."
+    elif plan[0] == "translate":
+        assert len(plan) in [4, 5], "The translate plan should have 4 or 5 elements"
+        target = plan[1]
+        direction = plan[2]
+        distance = plan[3]
+        assert direction in ['x', 'z'], "The direction should be x or z"
+        assert type(distance) in [int, float], "The distance should be a number"
+        direction_dict = {
+            "x": "left" if distance < 0 else "right",
+            "z": "front" if distance < 0 else "back",
+        }
+        distance = abs(distance)
+        instruction = f"move object towards the ***{direction_dict[direction]}*** direction for {distance:.2f} meters: {target}"
+        if distance > DISTANCE_THRESHOLD_OBVIOUS:
+            instruction = "obviously " + instruction
+        elif distance < DISTANCE_THRESHOLD_SLIGHT:
+            instruction = "slightly " + instruction
+
+        if len(plan) == 5:
+            relative = plan[4]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    elif plan[0] == "rotate":
+        assert len(plan) in [3, 4], "The rotate plan should have 3 or 4 elements"
+        target = plan[1]
+        angle = plan[2]
+        assert type(angle) in [int, float], "The angle should be a number"
+        if abs(angle) >= ANGLE_THRESHOLD_OBVIOUS:
+            instruction = f"obviously rotate object {angle:.0f} degrees: {target}"
+        elif abs(angle) <= ANGLE_THRESHOLD_SLIGHT:
+            instruction = f"slightly rotate object {angle:.0f} degrees: {target}"
+        else:
+            instruction = f"rotate object {angle:.0f} degrees: {target}"
+        if len(plan) == 4:
+            relative = plan[3]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    elif plan[0] == 'scale':
+        assert len(plan) in [3, 4], "The scale plan should have 3 or 4 elements"
+        target = plan[1]
+        scale = plan[2]
+        assert type(scale) in [int, float], "The scale should be a number"
+        if scale > 1:
+            instruction = f"enlarge object by {scale:.1f} X: {target}"
+            if scale > SCALE_THRESHOLD_OBVIOUS_UP:
+                instruction = "obviously " + instruction
+        elif scale < 1:
+            instruction = f"shrink object by {scale:.1f} X: {target}"
+            if scale < SCALE_THRESHOLD_OBVIOUS_DOWN:
+                instruction = "obviously " + instruction
+        else:
+            instruction = None
+        if len(plan) == 4:
+            relative = plan[3]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    elif plan[0] == 'replace':
+        assert len(plan) in [3, 4], "The replace plan should have 3 or 4 elements"
+        source = plan[1]
+        target = plan[2]
+        instruction = f"replace source with target : [Source] {source}; [Target] {target}"
+        if len(plan) == 4:
+            relative = plan[3]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    else:
+        raise ValueError(f"Invalid plan action: {plan}")
+
+    assert instruction is not None, "Cannot process the instruction. Please check the plan."
+    if instruction[-1] == "." and instruction[-2] == ".":
+        instruction = instruction[:-1]
+    return instruction
+
+
+def call_llm_api(message, api_key, retries=API_RETRY_COUNT):
+    """
+    Enhanced API call function with better error handling and timeout.
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    for i in range(retries):
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions",
+                                   headers=headers, json=message, timeout=60)
+            response_data = response.json()
+
+            if 'choices' in response_data:
+                return response_data['choices'][0]['message']['content']
+            else:
+                print(f"API call failed: {response_data}")
+                if i < retries - 1:
+                    time.sleep(2**i)
+        except Exception as e:
+            print(f"API call error: {e}")
+            if i < retries - 1:
+                time.sleep(2**i)
+
+    return None

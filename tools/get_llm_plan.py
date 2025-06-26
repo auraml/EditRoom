@@ -12,7 +12,7 @@ import torch
 import base64
 import time
 from src.data.threed_front import ThreedFront
-from tools.utils import submit_batch_files, retrieve_batch_response
+from tools.utils import submit_batch_files, retrieve_batch_response, convert_single_plan, call_llm_api
 
 from constants import EDIT_DATA_FOLDER
 
@@ -270,7 +270,7 @@ def reflect_invalid_command(command, fail_reason, proccessed_command, prompts, p
             "max_tokens": 4096
         }
 
-        new_command = call_openai_api(messages)
+        new_command = call_llm_api(messages, api_key)
         if new_command is None:
             print("Failed to get a response from OpenAI API. Please check your API key and network connection.")
             return None
@@ -316,133 +316,9 @@ def check_response_valid(command, pipeline, messages, terminators):
             return False, str(e), valid_response
     return True, instructions, valid_response
 
-def convert_single_plan(plan):
-    def add_relative(relative):
-        direction = relative[0]
-        target = relative[1]
-        if "right" in direction:
-            relative = "right of"
-        elif "left" in direction:
-            relative = "left of"
-        elif "front" in direction:
-            relative = "in front of"
-        else:
-            relative = direction
+# convert_single_plan function now imported from tools.utils
 
-        if "closely" in direction and not "closely" in relative:
-            relative = "closely " + relative
-
-        return f"location: ***{relative}*** {target}"
-
-    if plan[0] == "add":
-        assert len(plan) == 3, "The add plan should have 3 elements"
-        target = plan[1]
-        relative = plan[2]
-        assert len(relative) == 2, "The relative should have 2 elements"
-        relative_des = add_relative(relative)
-        instruction = f"add object: {target}; {relative_des}."
-    elif plan[0] == "remove":
-        assert len(plan) in [2, 3], "The remove plan should have 2 or 3 elements"
-        target = plan[1]
-        if len(plan) == 3:
-            relative = plan[2]
-            assert len(relative) == 2, "The relative should have 2 elements"
-            relative_des = add_relative(relative)
-            instruction = f"remove object: {target}; {relative_des}."
-        else:
-            instruction = f"remove object: {target}."
-    elif plan[0] == "translate":
-        assert len(plan) in [4, 5], "The translate plan should have 4 or 5 elements"
-        target = plan[1]
-        direction = plan[2]
-        distance = plan[3]
-        assert direction in ['x', 'z'], "The direction should be x or z"
-        assert type(distance) in [int, float], "The distance should be a number"
-        direction_dict = {
-            "x": "left" if distance < 0 else "right",
-            "z": "front" if distance < 0 else "back",
-        }
-        distance = abs(distance)
-        instruction = f"move object towards the ***{direction_dict[direction]}*** direction for {distance:.2f} meters: {target}"
-        if distance > 1:
-            instruction = "obviously " + instruction
-        elif distance < 0.5:
-            instruction = "slightly " + instruction
-
-        if len(plan) == 5:
-            relative = plan[4]
-            assert len(relative) == 2, "The relative should have 2 elements"
-            relative_des = add_relative(relative)
-            instruction += f"; {relative_des}."
-    elif plan[0] == "rotate":
-        assert len(plan) in [3, 4], "The rotate plan should have 3 or 4 elements"
-        target = plan[1]
-        angle = plan[2]
-        assert type(angle) in [int, float], "The angle should be a number"
-        if abs(angle) >= 135:
-            instruction = f"obviously rotate object {angle:.0f} degrees: {target}"
-        elif abs(angle) <= 45:
-            instruction = f"slightly rotate object {angle:.0f} degrees: {target}"
-        else:
-            instruction = f"rotate object {angle:.0f} degrees: {target}"
-        if len(plan) == 4:
-            relative = plan[3]
-            assert len(relative) == 2, "The relative should have 2 elements"
-            relative_des = add_relative(relative)
-            instruction += f"; {relative_des}."
-    elif plan[0] == 'scale':
-        assert len(plan) in [3, 4], "The scale plan should have 3 or 4 elements"
-        target = plan[1]
-        scale = plan[2]
-        assert type(scale) in [int, float], "The scale should be a number"
-        if scale > 1:
-            instruction = f"enlarge object by {scale:.1f} X: {target}"
-            if scale > 1.3:
-                instruction = "obviously " + instruction
-        elif scale < 1:
-            instruction = f"shrink object by {scale:.1f} X: {target}"
-            if scale < 0.7:
-                instruction = "obviously " + instruction
-        else:
-            instruction = None
-        if len(plan) == 4:
-            relative = plan[3]
-            assert len(relative) == 2, "The relative should have 2 elements"
-            relative_des = add_relative(relative)
-            instruction += f"; {relative_des}."
-    elif plan[0] == 'replace':
-        assert len(plan) in [3, 4], "The replace plan should have 3 or 4 elements"
-        source = plan[1]
-        target = plan[2]
-        instruction = f"replace source with target : [Source] {source}; [Target] {target}"
-        if len(plan) == 4:
-            relative = plan[3]
-            assert len(relative) == 2, "The relative should have 2 elements"
-            relative_des = add_relative(relative)
-            instruction += f"; {relative_des}."
-    else:
-        raise ValueError(f"Invalid plan action: {plan}")
-    assert instruction is not None, "Cannot process the instruction. Please check the plan."
-    if instruction[-1] == "." and instruction[-2] == ".":
-        instruction = instruction[:-1]
-    return instruction
-
-def call_openai_api(message, retries=3):
-
-    headers = {
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {api_key}"
-    }
-
-    for i in range(retries):
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=message)
-        response = response.json()
-        if 'choices' in response.keys():
-            desc = response['choices'][0]['message']['content']
-            return desc
-        else:
-            time.sleep(2**i)
-    return None
+# call_llm_api function now imported from tools.utils
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
