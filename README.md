@@ -205,7 +205,7 @@ This will download trained checkpoints from Hugging Face to the `./weights` dire
 
 ### Running Inference
 
-This guide shows how to use the `infer.py` script for interactive 3D scene editing.
+This guide shows how to use the `infer.py` script for interactive 3D scene editing. `infer.py` can be run directly after `weights_download.py` and edit pair creation by `edit_data_generator`
 
 #### Script Arguments
 
