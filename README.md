@@ -230,8 +230,8 @@ Use this mode to render and save the original scene without any editing:
 
 ```bash
 PYTHONPATH=. python src/infer.py \
-  --source_scene_id 0d7be408-9e3d-4f68-8422-5aa2069ccdb2_MasterBedroom-27127 \
-  --room_type bedroom \
+  --source_scene_id [SRC_SCENE_ID] \
+  --room_type [bedroom/livingroom/diningroom] \
   --sg_config_file ./configs/bedroom_sg_diffusion.yaml \
   --sg2sc_config_file ./configs/bedroom_sg2sc_diffusion.yaml \
   --sg_weight_file [SG_WT_FILE_PATH] \
@@ -245,8 +245,8 @@ Use this mode to edit scenes with natural language commands:
 
 ```bash
 PYTHONPATH=. python src/infer.py \
-  --source_scene_id 0d7be408-9e3d-4f68-8422-5aa2069ccdb2_MasterBedroom-27127 \
-  --room_type bedroom \
+  --source_scene_id [SRC_SCENE_ID] \
+  --room_type [bedroom/livingroom/diningroom] \
   --sg_config_file ./configs/bedroom_sg_diffusion.yaml \
   --sg2sc_config_file ./configs/bedroom_sg2sc_diffusion.yaml \
   --sg_weight_file [SG_WT_FILE_PATH] \
@@ -264,8 +264,8 @@ Use this mode to reduce verbose output during editing:
 
 ```bash
 PYTHONPATH=. python src/infer.py \
-  --source_scene_id 0d7be408-9e3d-4f68-8422-5aa2069ccdb2_MasterBedroom-27127 \
-  --room_type bedroom \
+  --source_scene_id [SRC_SCENE_ID] \
+  --room_type [bedroom/livingroom/diningroom] \
   --sg_config_file ./configs/bedroom_sg_diffusion.yaml \
   --sg2sc_config_file ./configs/bedroom_sg2sc_diffusion.yaml \
   --sg_weight_file [SG_WT_FILE_PATH] \
