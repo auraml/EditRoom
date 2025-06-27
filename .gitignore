@@ -5,6 +5,7 @@ __pycache__/
 datasets/
 single_scene_results/
 weights/
+weights_/
 
 # C extensions
 *.so

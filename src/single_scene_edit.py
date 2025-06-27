@@ -1,27 +1,33 @@
-import sys
-import os
+# Standard library imports
 import argparse
-import json
-import yaml
-import pickle
-import torch
-import numpy as np
-from pathlib import Path
-import requests
-import time
-import shutil
 import datetime
-import math
 import importlib.util
+import json
+import math
+import os
+import pickle
+import re
+import shutil
+import sys
+import time
 from copy import deepcopy
-from tqdm import tqdm
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union, Any
+
+# Third-party imports
+import numpy as np
+import requests
+import torch
+import yaml
 from lightning.pytorch import seed_everything
+from tqdm import tqdm
+
+# Optional imports with fallbacks
 try:
     from yaml import CLoader as Loader
 except ImportError:
     from yaml import Loader
 
-# Additional imports for collision detection
 try:
     from shapely.geometry import Polygon, Point
     SHAPELY_AVAILABLE = True
@@ -36,13 +42,40 @@ except ImportError:
     SCIPY_AVAILABLE = False
     print("COLLISION_DEBUG: Warning - SciPy not available, some collision functions may not work")
 
-from models.room_edit import RoomEdit
-from data.utils_data import get_dataset
-from data.threed_front import ThreedFront
-from utils.visualize import export_scene
-from utils.util import construct_scene_from_vq_objdata, get_blender_render, render_generated_scene
-
+# Local imports
 from constants import EDIT_DATA_FOLDER, EDITROOM_DATA_FOLDER, OPENAI_API_KEY, BLENDER_PATH
+from src.data.threed_front import ThreedFront
+from src.data.utils_data import get_dataset
+from src.models.room_edit import RoomEdit
+from src.utils.util import construct_scene_from_vq_objdata, get_blender_render, render_generated_scene
+from src.utils.visualize import export_scene
+# Import utility functions from inference_utils
+from src.utils.inference_utils import (
+    suppress_output, parse_arguments, load_configs, validate_feature_paths,
+    extract_obj_features, create_output_folder, construct_plan_prompt,
+    call_llm_api, convert_single_plan, extract_commands, validate_coordinates,
+    extract_base_scene_id, find_base_scene
+)
+
+# Constants for magic numbers
+MAX_COLLISION_DISPLAY = 3
+MAX_FILE_MATCHES_DISPLAY = 5
+DEFAULT_CAMERA_DISTANCE = 1.2
+API_RETRY_COUNT = 3
+MAX_TOKENS = 2048
+ANGLE_THRESHOLD_OBVIOUS = 135
+ANGLE_THRESHOLD_SLIGHT = 45
+SCALE_THRESHOLD_OBVIOUS_UP = 1.3
+SCALE_THRESHOLD_OBVIOUS_DOWN = 0.7
+MAX_COLLISION_RESOLUTION_ATTEMPTS = 100
+COORDINATE_NORMALIZATION_THRESHOLD = 1.0
+DISTANCE_THRESHOLD_OBVIOUS = 1.0
+DISTANCE_THRESHOLD_SLIGHT = 0.5
+COLLISION_SEPARATION_FACTOR = 0.6
+COLLISION_SAFETY_MARGIN = 0.1
+COMMAND_PREVIEW_LENGTH = 50
+STRING_PREVIEW_LENGTH = 100
+DEFAULT_ZERO_ANGLE = 0.0
 
 # COLLISION DETECTION DEBUGGING: Import collision functions from tools
 tools_path = os.path.join(os.path.dirname(__file__), '..', 'tools')
@@ -99,9 +132,16 @@ except ImportError as e:
         print(f"  Utils file exists: {os.path.exists(os.path.join(tools_path, 'utils.py'))}")
         print(f"  Available dependencies: shapely={SHAPELY_AVAILABLE}, scipy={SCIPY_AVAILABLE}")
 
-def debug_check_scene_collisions(scene_data, step_description="", verbose=True):
-    """
-    COLLISION_DEBUG: Check for collisions in a scene and print detailed information
+def debug_check_scene_collisions(scene_data, step_description: str = "", verbose: bool = True) -> bool:
+    """Check for collisions in a scene and print detailed information.
+
+    Args:
+        scene_data: Scene data object containing bboxes
+        step_description: Description of current processing step
+        verbose: Whether to print debug information
+
+    Returns:
+        True if collisions found, False otherwise
     """
     if not COLLISION_DETECTION_AVAILABLE:
         if verbose:
@@ -114,7 +154,7 @@ def debug_check_scene_collisions(scene_data, step_description="", verbose=True):
             if not hasattr(obj, 'position') or not hasattr(obj, 'size'):
                 continue
             if not hasattr(obj, 'z_angle'):
-                obj.z_angle = 0.0
+                obj.z_angle = DEFAULT_ZERO_ANGLE
 
         # Check all pairs for collisions
         collision_found = check_collision_all(scene_data)
@@ -134,8 +174,9 @@ def debug_check_scene_collisions(scene_data, step_description="", verbose=True):
 
         if verbose:
             if collision_found:
-                print(f"[{step_description}] COLLISION DETECTED: {len(collision_pairs)} collision(s) detected among {len(scene_data.bboxes)} objects")
-                for i, j, obj1, obj2 in collision_pairs[:3]:  # Show max 3 collisions
+                print(f"[{step_description}] COLLISION DETECTED: "
+              f"{len(collision_pairs)} collision(s) detected among {len(scene_data.bboxes)} objects")
+                for i, j, obj1, obj2 in collision_pairs[:MAX_COLLISION_DISPLAY]:  # Show max 3 collisions
                     print(f"  - {obj1.label} ↔ {obj2.label}")
             else:
                 print(f"[{step_description}] NO COLLISIONS: ({len(scene_data.bboxes)} objects)")
@@ -147,95 +188,36 @@ def debug_check_scene_collisions(scene_data, step_description="", verbose=True):
             print(f"COLLISION_DEBUG: [{step_description}] Error checking collisions: {e}")
         return False
 
-def suppress_output():
-    """Context manager to suppress stdout and stderr output."""
-    null_file = open(os.devnull, 'w')
-    old_stdout = sys.stdout
-    old_stderr = sys.stderr
-    try:
-        sys.stdout = null_file
-        sys.stderr = null_file
-        yield
-    finally:
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
-        null_file.close()
-
-
 QUIET_MODE = False
 
-def qprint(*args, **kwargs):
-    """this is a helper function to surpress blender output verbose """
+def qprint(*args, **kwargs) -> None:
+    """Helper function to suppress blender output in quiet mode.
+
+    Args:
+        *args: Arguments to pass to print()
+        **kwargs: Keyword arguments to pass to print()
+    """
     if not QUIET_MODE:
         print(*args, **kwargs)
 
 
-def extract_base_scene_id(scene_id):
-
-    suffixes = ['_pose-', '_remove-', '_add-', '_replace-']
-    base_id = scene_id
-
-    for suffix in suffixes:
-        if suffix in base_id:
-            base_id = base_id.split(suffix)[0]
-            break
-
-    qprint(f"Extracted base scene ID: '{scene_id}' -> '{base_id}'")
-    return base_id
+# extract_base_scene_id removed - now imported from inference_utils
 
 
-def find_base_scene(base_scene_id, test_dataset_folder):
-    """
-    Find the base scene file in test dataset folder.
+# find_base_scene removed - now imported from inference_utils
+
+
+def ss_fallback(scene_id: str, room_type: str) -> Tuple[Any, Any, Any]:
+    """Fallback function that uses the original scene loading method.
+
+    Used when base scene detection fails.
 
     Args:
-        base_scene_id (str): Base scene ID without edit suffixes
-        test_dataset_folder (str): Path to test_dataset folder
+        scene_id: Scene ID to load
+        room_type: Type of room (bedroom, livingroom, diningroom)
 
     Returns:
-        str: Full path to the base scene .pkl file
-
-    Raises:
-        FileNotFoundError: If base scene not found
-    """
-    base_scene_file = f"{base_scene_id}.pkl"
-    base_scene_path = os.path.join(test_dataset_folder, base_scene_file)
-
-    if os.path.exists(base_scene_path):
-        qprint(f"Found exact base scene match: {base_scene_file}")
-        return base_scene_path
-
-
-    qprint(f"Exact match not found, searching for base scene pattern...")
-    edit_suffixes = ['_pose-', '_remove-', '_add-', '_replace-']
-
-    for filename in os.listdir(test_dataset_folder):
-        if filename.startswith(base_scene_id) and filename.endswith('.pkl'):
-            # Check if this file has no edit suffixes
-            has_edit_suffix = any(suffix in filename for suffix in edit_suffixes)
-            if not has_edit_suffix:
-                full_path = os.path.join(test_dataset_folder, filename)
-                qprint(f"Found base scene without edit suffixes: {filename}")
-                return full_path
-
-
-    matching_files = [f for f in os.listdir(test_dataset_folder) if f.startswith(base_scene_id) and f.endswith('.pkl')]
-    if matching_files:
-        qprint(f"Found {len(matching_files)} files matching pattern:")
-        for f in matching_files[:5]:  # Show first 5 matches
-            qprint(f"  - {f}")
-        # Use the first match as fallback
-        fallback_path = os.path.join(test_dataset_folder, matching_files[0])
-        qprint(f"Warning: Using fallback file: {matching_files[0]}")
-        return fallback_path
-
-    raise FileNotFoundError(f"Base scene {base_scene_id} not found in {test_dataset_folder}")
-
-
-def ss_fallback(scene_id, room_type):
-    """
-    Fallback function that uses the original scene loading method.
-    Used when base scene detection fails.
+        Tuple of (scene_data, temp_raw_dataset, object_dataset)
     """
     qprint("Using fallback scene loading method...")
 
@@ -294,7 +276,9 @@ def ss_fallback(scene_id, room_type):
     temp_raw_dataset.uid_to_scene_index = {scene_data.uid: 0, base_scene_id: 0}
 
     # Load object dataset
-    object_save_path = os.path.join(EDIT_DATA_FOLDER, f"threed_front_{room_type}", f"threed_front_{room_type}_objects.pkl")
+    object_save_path = os.path.join(
+        EDIT_DATA_FOLDER, f"threed_front_{room_type}", f"threed_front_{room_type}_objects.pkl"
+    )
     with tqdm(desc="Loading object dataset", unit="step") as pbar:
         with open(object_save_path, "rb") as f:
             object_dataset = pickle.load(f)
@@ -303,58 +287,28 @@ def ss_fallback(scene_id, room_type):
     return scene_data, temp_raw_dataset, object_dataset
 
 
-def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Single scene editing with EditRoom")
-    parser.add_argument("--source_scene_id", required=True,
-                       help="Source scene UID (without .pkl extension)")
-    parser.add_argument("--room_type", required=True,
-                       choices=["bedroom", "livingroom", "diningroom"],
-                       help="Room type")
-    parser.add_argument("--sg_config_file", required=True,
-                       help="Path to scene graph config file")
-    parser.add_argument("--sg2sc_config_file", required=True,
-                       help="Path to scene graph to scene config file")
-    parser.add_argument("--sg_weight_file", required=True,
-                       help="Path to scene graph model weights")
-    parser.add_argument("--sg2sc_weight_file", required=True,
-                       help="Path to scene graph to scene model weights")
-    parser.add_argument("--output_directory", default="single_scene_results",
-                       help="Output directory for results")
-    parser.add_argument("--no_edit", action="store_true",
-                       help="Only visualize original scene")
-    parser.add_argument("--seed", type=int, default=42,
-                       help="Random seed")
-    parser.add_argument("--quiet", action="store_true",
-                       help="Suppress verbose output and debug messages")
-
-    return parser.parse_args()
+# parse_arguments removed - now imported from inference_utils
 
 
-def load_configs(sg_config_file, sg2sc_config_file):
-    """Load configuration files."""
-    qprint("Loading configuration files...")
-
-    # Load scene graph config
-    with open(sg_config_file, "r") as f:
-        sg_config = yaml.load(f, Loader=Loader)
-
-    # Load scene graph to scene config
-    with open(sg2sc_config_file, "r") as f:
-        sg2sc_config = yaml.load(f, Loader=Loader)
-
-    return sg_config, sg2sc_config
+# load_configs removed - now imported from inference_utils
 
 
-def load_single_scene(scene_id, room_type):
-    """
-    Load single scene data with enhanced base scene detection.
+def load_single_scene(scene_id: str, room_type: str) -> Tuple[Any, Any, Any]:
+    """Load single scene data with enhanced base scene detection.
+
     Now properly loads base scenes instead of pre-edited scenes.
+
+    Args:
+        scene_id: Scene ID to load
+        room_type: Type of room (bedroom, livingroom, diningroom)
+
+    Returns:
+        Tuple of (scene_data, temp_raw_dataset, object_dataset)
     """
     qprint(f"Loading scene {scene_id} for room type {room_type}...")
 
 
-    base_scene_id = extract_base_scene_id(scene_id)
+    base_scene_id = extract_base_scene_id(scene_id, verbose=not QUIET_MODE)
 
 
     temp_dataset_folder = os.path.join(EDIT_DATA_FOLDER, f"threed_front_{room_type}", "temp_single_scene_batch")
@@ -370,7 +324,7 @@ def load_single_scene(scene_id, room_type):
 
     if os.path.exists(test_data_folder):
         try:
-            base_scene_file_path = find_base_scene(base_scene_id, test_data_folder)
+            base_scene_file_path = find_base_scene(base_scene_id, test_data_folder, verbose=not QUIET_MODE)
             dataset_folder_used = test_data_folder
             qprint(f"Base scene found in test dataset: {os.path.basename(base_scene_file_path)}")
         except FileNotFoundError:
@@ -378,7 +332,7 @@ def load_single_scene(scene_id, room_type):
 
     if base_scene_file_path is None and os.path.exists(train_data_folder):
         try:
-            base_scene_file_path = find_base_scene(base_scene_id, train_data_folder)
+            base_scene_file_path = find_base_scene(base_scene_id, train_data_folder, verbose=not QUIET_MODE)
             dataset_folder_used = train_data_folder
             qprint(f"Base scene found in train dataset: {os.path.basename(base_scene_file_path)}")
         except FileNotFoundError:
@@ -417,7 +371,9 @@ def load_single_scene(scene_id, room_type):
     temp_raw_dataset.uid_to_scene_index = {scene_data.uid: 0, base_scene_id: 0}
 
 
-    object_save_path = os.path.join(EDIT_DATA_FOLDER, f"threed_front_{room_type}", f"threed_front_{room_type}_objects.pkl")
+    object_save_path = os.path.join(
+        EDIT_DATA_FOLDER, f"threed_front_{room_type}", f"threed_front_{room_type}_objects.pkl"
+    )
     with tqdm(desc="Loading object dataset", unit="step") as pbar:
         with open(object_save_path, "rb") as f:
             object_dataset = pickle.load(f)
@@ -427,129 +383,13 @@ def load_single_scene(scene_id, room_type):
     return scene_data, temp_raw_dataset, object_dataset
 
 
-def validate_coordinates(scene_params, raw_dataset):
-    """
-
-    Args:
-        scene_params (dict): Scene parameters with translations, sizes, etc.
-        raw_dataset: Dataset with normalization bounds
-
-    Returns:
-        dict: Fixed scene parameters
-    """
-    translations = scene_params['translations']
-    sizes = scene_params['sizes']
-
-    qprint(f"Validating coordinates...")
-    qprint(f"Translation range: [{np.min(translations):.3f}, {np.max(translations):.3f}]")
-    qprint(f"Size range: [{np.min(sizes):.3f}, {np.max(sizes):.3f}]")
-
-    if np.all(np.abs(translations) <= 1.0) and np.all(sizes <= 1.0):
-        print("WARNING: Detected normalized coordinates, denormalizing...")
-
-        if hasattr(raw_dataset, 'centroids') and hasattr(raw_dataset, 'sizes'):
-            centroids_min, centroids_max = raw_dataset.centroids
-            sizes_min, sizes_max = raw_dataset.sizes
-
-            print(f"Dataset centroid bounds: [{centroids_min}, {centroids_max}]")
-            print(f"Dataset size bounds: [{sizes_min}, {sizes_max}]")
-
-            # Denormalize translations: from [-1,1] to [min,max]
-            translations = translations * (centroids_max - centroids_min) / 2.0 + (centroids_max + centroids_min) / 2.0
-
-            # Denormalize sizes: from [0,1] to [min,max]
-            sizes = sizes * (sizes_max - sizes_min) + sizes_min
-
-            scene_params['translations'] = translations
-            scene_params['sizes'] = sizes
-
-            print(f"Coordinates denormalized successfully")
-            print(f"New translation range: [{np.min(translations):.3f}, {np.max(translations):.3f}]")
-            print(f"New size range: [{np.min(sizes):.3f}, {np.max(sizes):.3f}]")
-        else:
-            print("Warning: Dataset bounds not available, cannot denormalize")
-    else:
-        print("Coordinates appear to be in real-world scale (meters)")
-
-    return scene_params
+# validate_coordinates removed - now imported from inference_utils
 
 
-def validate_feature_paths():
-    """
-    Raises:
-        FileNotFoundError: If required directories are missing
-    """
-    print("Validating feature extraction paths...")
-
-    paths_to_check = [
-        os.path.join(EDITROOM_DATA_FOLDER, "preprocess", "openshape_vitg14_indexs"),
-        os.path.join(EDITROOM_DATA_FOLDER, "preprocess", "openshape_vitg14_recon"),
-        os.path.join(EDITROOM_DATA_FOLDER, "3D-FRONT", "3D-FUTURE-model")
-    ]
-
-    missing_paths = []
-    for path in paths_to_check:
-        if not os.path.exists(path):
-            missing_paths.append(path)
-        else:
-            print(f"Found: {path}")
-
-    if missing_paths:
-        print("Missing required feature directories:")
-        for path in missing_paths:
-            print(f"  - {path}")
-        raise FileNotFoundError(f"Required feature directories not found. Please complete preprocessing first.")
-
-    print("All feature directories validated successfully")
+# validate_feature_paths removed - now imported from inference_utils
 
 
-def extract_obj_features(bbox):
-    """
-    Args:
-        bbox: Bounding box object with feature methods
-
-    Returns:
-        dict: Dictionary with extracted features
-
-    Raises:
-        ValueError: If any features cannot be extracted
-    """
-    features = {}
-
-    # Get VQ reconstructed features
-    try:
-        if hasattr(bbox, 'openshape_vitg14_recon') and callable(bbox.openshape_vitg14_recon):
-            features['objfeat_vq_recon'] = bbox.openshape_vitg14_recon()
-            print(f"Loaded VQ recon features for {bbox.model_jid}: shape {features['objfeat_vq_recon'].shape}")
-        else:
-            raise ValueError(f"VQ recon method not available for {bbox.model_jid}")
-    except Exception as e:
-        print(f"Failed to load VQ recon for {bbox.model_jid}: {e}")
-        raise ValueError(f"Cannot proceed without real VQ features for {bbox.model_jid}")
-
-    # Get VQ indices
-    try:
-        if hasattr(bbox, 'openshape_vitg14_index') and callable(bbox.openshape_vitg14_index):
-            features['objfeat_vq_indices'] = bbox.openshape_vitg14_index()
-            print(f"Loaded VQ indices for {bbox.model_jid}: shape {features['objfeat_vq_indices'].shape}")
-        else:
-            raise ValueError(f"VQ index method not available for {bbox.model_jid}")
-    except Exception as e:
-        print(f"Failed to load VQ indices for {bbox.model_jid}: {e}")
-        raise ValueError(f"Cannot proceed without real VQ indices for {bbox.model_jid}")
-
-    # Get original features
-    try:
-        if hasattr(bbox, 'openshape_vitg14_features') and bbox.openshape_vitg14_features is not None:
-            features['objfeat_vitg14_features'] = bbox.openshape_vitg14_features
-            print(f"Loaded original features for {bbox.model_jid}: shape {features['objfeat_vitg14_features'].shape}")
-        else:
-            raise ValueError(f"Original features not available for {bbox.model_jid}")
-    except Exception as e:
-        print(f"Failed to load original features for {bbox.model_jid}: {e}")
-        raise ValueError(f"Cannot proceed without real original features for {bbox.model_jid}")
-
-    return features
+# extract_obj_features removed - now imported from inference_utils
 
 
 def convert_scene_to_params(scene_data, raw_dataset=None):
@@ -564,7 +404,7 @@ def convert_scene_to_params(scene_data, raw_dataset=None):
     """
     print("Converting scene to parameters with real feature extraction...")
 
-    validate_feature_paths()
+    validate_feature_paths(EDITROOM_DATA_FOLDER)
 
     n_objects = len(scene_data.bboxes)
     print(f"Processing {n_objects} objects...")
@@ -622,7 +462,7 @@ def convert_scene_to_params(scene_data, raw_dataset=None):
 
     print(f"Successfully extracted features for {len(scene_data.bboxes)} objects")
 
-    scene_params = validate_coordinates(scene_params, raw_dataset)
+    scene_params = validate_coordinates(scene_params, raw_dataset, verbose=not QUIET_MODE)
 
     return scene_params
 
@@ -630,7 +470,6 @@ def convert_scene_to_params(scene_data, raw_dataset=None):
 def viz_org_scene(scene_data, raw_dataset, object_dataset, output_folder):
     """
     Visualize original scene without editing.
-    Borrowed from room_edit.py postprocess_generation() and visualize.py
     """
     print("Visualizing original scene...")
 
@@ -668,243 +507,23 @@ def viz_org_scene(scene_data, raw_dataset, object_dataset, output_folder):
     try:
         with tqdm(desc="Rendering scene", unit="step") as pbar:
             get_blender_render(scene_data, scene_trimesh,
-                              save_folder=original_folder, verbose=False, remove_mesh=True, camera_dist=1.2)
+                              save_folder=original_folder, verbose=False, remove_mesh=True, camera_dist=DEFAULT_CAMERA_DISTANCE)
             pbar.update(1)
         print(f"Original scene visualization saved to: {original_folder}")
     except Exception as e:
         print(f"Error rendering scene: {e}")
 
 
-def create_output_folder(output_directory, source_scene_id):
-    """Creates output folder with timestamp."""
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    folder_name = f"{source_scene_id}_{timestamp}"
-    output_folder = os.path.join(output_directory, folder_name)
-    os.makedirs(output_folder, exist_ok=True)
-    return output_folder
+# create_output_folder removed - now imported from inference_utils
 
 
-def construct_plan_prompt(source_scene, instruction, class_labels, use_image=False):
-    """
-    Construct LLM prompt for planning.
-    Borrowed from get_llm_plan.py lines 164-208
-    """
-    scene_description = source_scene.get_room_description()
-
-    system_prompt = "Imagine you are a indoor room designer and you are using provided API to control the 3D models in the scene.\n" + \
-        "Given one scene configuration and a command to edit the scene, you should use the provided APIs to do planning and achieve the target.\n" + \
-        "All sizes and centroids in scene configurations are in meters. The angles are defined in degrees. The dimension sequence is [x,y,z]. Vertical angles are the angles along the y-axis.\n"+ \
-        "Sizes are the half lengths of the bounding box along the x, y, and z axes when the vertical angle is zero.\n" + \
-        "We define +x/-x as the right/left direction, +y/-y as the up/down direction, and +z/-z as the front/back direction.\n" + \
-        "Positive angles are counterclockwise, and negative angles are clockwise.\n\n" + \
-        "APIs:\n" + \
-        "1. Rotate an object: ['Rotate', Target Object Description, Angle :(degrees)]\n" + \
-        "2. Translate an object: ['Translate', Target Object Description, Direction :(x/z), Distance :(meters)]\n" + \
-        "3. Scale an object: ['Scale', Target Object Description, Scale Factor]\n" + \
-        "4. Replace an object: ['Replace', Source Object Description, Target Object Description]\n" + \
-        "5. Add an object: ['Add', Target Object Description, (Relative Description, Relative Object Description)]\n" + \
-        "6. Remove an object: ['Remove', Target Object Description]\n\n" + \
-        "Matters needing attention:\n" + \
-        "1. If there are multiple same objects in the scene and the command is related to the object, you should refer to the object locations.\n" + \
-        "When you refer to the object locations, you should this format: (Relative Description, Relative Object Description). All reference should be append in the end of API lists.\n" + \
-        "When you use add or remove command, you should refer to the object locations.\n" + \
-        "Relative Description: [left, right, in front of, behind, above, below, closely left, closely right, closely in front of, closely behind]. 'closely' means the distance between two object centroids are less than 1 meters in x-z plane.\n" + \
-        "For example, if you want to add a chair in front of the table, you should use the format: ['Add', 'chair', ('in front of', 'table')].\n" + \
-        "At most add one relative description and one relative object description. Select the cloest one if there are more than two relative descriptions.\n" + \
-        "The relative object description should be the same as the object description in the scene configuration.\n" + \
-        "2. Translate, rotate, and scale commands should be executed in the order of scale, rotate, and translate.\n" + \
-        "Translate should only work in the x/z direction. The distance should be one float number.\n" + \
-        "3. When you scale an object, the object should be scaled uniformly. Scale factor should one float number.\n" + \
-        "4. Replace object will only replace the object with the same class. Replace command will only change the object appearance, not the object poses and sizes.\n" + \
-        "5. If Translate/Rotate/Scale commands can achieve the target, you should not use Replace/Add/Remove commands.\n" + \
-        "6. If image is provided, you should use the image to help you understand the scene.\n" + \
-        "7. Attempt to use the minimum number of commands to achieve the target.\n" + \
-        f"8. If you want to add or replace object, you can only consider from these object classes: {json.dumps(class_labels)}.\n" + \
-        "9. If you want to remove and add the object within the same class, you should use the replace command.\n" + \
-        "10. Object descriptions should be detailed descriptions instead of class names. You can imagine the object descriptions if the object is not in the scene.\n" + \
-        "11. Do not repeat the same API with the same objects.\n"+\
-        "12. All apis should be able to converted to a list of strings and numbers, which can be directly processed by json.loads()\n\n"+\
-        "For example:\n" + \
-        "1. If you want to rotate a chair 90 degrees and there is only one chair in the scene, you should use the format: ['Rotate', 'chair', 90].\n" + \
-        "2. If you want to add a chair in front of the wooden table, you should use the format: ['Add', 'chair', ('in front of', 'a wooden table')].\n" + \
-        "3. If you want to remove a chair, you should use the format: ['Remove', 'chair'].\n" + \
-        "4. If you want to replace a metal chair with a wooden one and this chair on the left of the bed with wooden design, you should use the format: ['Replace', 'the chair is metal', 'the chair is wooden', ('left', 'the bed is wooden')].\n\n" + \
-        "Think about it step by step. Summarize the used apis at the end by lines. The final output format should be ***[api 1, api 2, ...]***.\n"
-
-    prompt = "[Scene configurations]:\n" + scene_description + "\n" + \
-        "[Command]:" + json.dumps(instruction) + "\n\n" + \
-        "If there are multiple relative descriptions for one API, you should select the closest one.\n" + \
-        "Checkout at the end to make sure output the final plan in the format of ***[api 1, api 2, ...]***.\n"
-
-    content = [{
-        "type": "text",
-        "text": prompt
-    }]
-
-    message = {
-        "model": "gpt-4o",
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": content
-            }
-        ],
-        "max_tokens": 2048
-    }
-    return message
+# construct_plan_prompt removed - now imported from inference_utils
 
 
-def call_llm_api(message, retries=3):
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {OPENAI_API_KEY}"
-    }
-
-    for i in range(retries):
-        try:
-            response = requests.post("https://api.openai.com/v1/chat/completions",
-                                   headers=headers, json=message, timeout=60)
-            response_data = response.json()
-
-            if 'choices' in response_data:
-                return response_data['choices'][0]['message']['content']
-            else:
-                print(f"API call failed: {response_data}")
-                if i < retries - 1:
-                    time.sleep(2**i)
-        except Exception as e:
-            print(f"API call error: {e}")
-            if i < retries - 1:
-                time.sleep(2**i)
-
-    return None
+# call_llm_api removed - now imported from inference_utils
 
 
-def convert_single_plan(plan):
-    """
-    Converts single plan to instruction format.
-    """
-    def add_relative(relative):
-        direction = relative[0]
-        target = relative[1]
-        if "right" in direction:
-            relative = "right of"
-        elif "left" in direction:
-            relative = "left of"
-        elif "front" in direction:
-            relative = "in front of"
-        else:
-            relative = direction
-
-        if "closely" in direction and not "closely" in relative:
-            relative = "closely " + relative
-
-        return f"location: ***{relative}*** {target}"
-
-    if plan[0] == "add":
-        assert len(plan) == 3, "The add plan should have 3 elements"
-        target = plan[1]
-        relative = plan[2]
-        # Handle both tuple and list formats for relative descriptions
-        if isinstance(relative, (list, tuple)) and len(relative) == 2:
-            relative_des = add_relative(relative)
-            instruction = f"add object: {target}; {relative_des}."
-        else:
-            instruction = f"add object: {target}."
-    elif plan[0] == "remove":
-        assert len(plan) in [2, 3], "The remove plan should have 2 or 3 elements"
-        target = plan[1]
-        if len(plan) == 3:
-            relative = plan[2]
-            # Handle both tuple and list formats for relative descriptions
-            if isinstance(relative, (list, tuple)) and len(relative) == 2:
-                relative_des = add_relative(relative)
-                instruction = f"remove object: {target}; {relative_des}."
-            else:
-                instruction = f"remove object: {target}."
-        else:
-            instruction = f"remove object: {target}."
-    elif plan[0] == "translate":
-        assert len(plan) in [4, 5], "The translate plan should have 4 or 5 elements"
-        target = plan[1]
-        direction = plan[2]
-        distance = plan[3]
-        assert direction in ['x', 'z'], "The direction should be x or z"
-        assert type(distance) in [int, float], "The distance should be a number"
-        direction_dict = {
-            "x": "left" if distance < 0 else "right",
-            "z": "front" if distance < 0 else "back",
-        }
-        distance = abs(distance)
-        instruction = f"move object towards the ***{direction_dict[direction]}*** direction for {distance:.2f} meters: {target}"
-        if distance > 1:
-            instruction = "obviously " + instruction
-        elif distance < 0.5:
-            instruction = "slightly " + instruction
-
-        if len(plan) == 5:
-            relative = plan[4]
-            if isinstance(relative, (list, tuple)) and len(relative) == 2:
-                relative_des = add_relative(relative)
-                instruction += f"; {relative_des}."
-    elif plan[0] == "rotate":
-        assert len(plan) in [3, 4], "The rotate plan should have 3 or 4 elements"
-        target = plan[1]
-        angle = plan[2]
-        assert type(angle) in [int, float], "The angle should be a number"
-        if abs(angle) >= 135:
-            instruction = f"obviously rotate object {angle:.0f} degrees: {target}"
-        elif abs(angle) <= 45:
-            instruction = f"slightly rotate object {angle:.0f} degrees: {target}"
-        else:
-            instruction = f"rotate object {angle:.0f} degrees: {target}"
-        if len(plan) == 4:
-            relative = plan[3]
-            if isinstance(relative, (list, tuple)) and len(relative) == 2:
-                relative_des = add_relative(relative)
-                instruction += f"; {relative_des}."
-    elif plan[0] == 'scale':
-        assert len(plan) in [3, 4], "The scale plan should have 3 or 4 elements"
-        target = plan[1]
-        scale = plan[2]
-        assert type(scale) in [int, float], "The scale should be a number"
-        if scale > 1:
-            instruction = f"enlarge object by {scale:.1f} X: {target}"
-            if scale > 1.3:
-                instruction = "obviously " + instruction
-        elif scale < 1:
-            instruction = f"shrink object by {scale:.1f} X: {target}"
-            if scale < 0.7:
-                instruction = "obviously " + instruction
-        else:
-            instruction = None
-        if len(plan) == 4:
-            relative = plan[3]
-            if isinstance(relative, (list, tuple)) and len(relative) == 2:
-                relative_des = add_relative(relative)
-                instruction += f"; {relative_des}."
-    elif plan[0] == 'replace':
-        assert len(plan) in [3, 4], "The replace plan should have 3 or 4 elements"
-        source = plan[1]
-        target = plan[2]
-        instruction = f"replace source with target : [Source] {source}; [Target] {target}"
-        if len(plan) == 4:
-            relative = plan[3]
-            if isinstance(relative, (list, tuple)) and len(relative) == 2:
-                relative_des = add_relative(relative)
-                instruction += f"; {relative_des}."
-    else:
-        raise ValueError(f"Invalid plan action: {plan}")
-
-    assert instruction is not None, "Cannot process the instruction. Please check the plan."
-    if instruction[-1] == "." and instruction[-2] == ".":
-        instruction = instruction[:-1]
-    return instruction
+# convert_single_plan removed - now imported from inference_utils
 
 
 def process_command(scene_data, command, class_labels):
@@ -920,7 +539,7 @@ def process_command(scene_data, command, class_labels):
     # Calling LLM API
     print("Calling OpenAI API...")
     with tqdm(desc="Calling OpenAI API", unit="request") as pbar:
-        response = call_llm_api(message)
+        response = call_llm_api(message, OPENAI_API_KEY)
         if response is None:
             raise RuntimeError("Failed to get response from OpenAI API")
         pbar.update(1)
@@ -940,137 +559,7 @@ def process_command(scene_data, command, class_labels):
     return processed_commands
 
 
-def extract_commands(response):
-    """
-    Extract and convert API commands from OpenAI response.
-    Enhanced to handle nested JSON structures and multiple commands.
-    """
-    import ast
-    import re
-    import json
-
-    print(f"Extracting commands from response...")
-
-    # First try to find JSON code blocks
-    json_block_pattern = r'```json\s*(.*?)\s*```'
-    json_match = re.search(json_block_pattern, response, re.DOTALL)
-
-    if json_match:
-        json_text = json_match.group(1).strip()
-        print(f"Found JSON code block")
-        try:
-            commands = json.loads(json_text)
-            print(f"Successfully parsed JSON: {commands}")
-        except json.JSONDecodeError as e:
-            print(f"JSON parsing failed: {e}")
-            json_match = None
-
-    if not json_match:
-        # Enhanced patterns to handle nested JSON structures
-        patterns = [
-            r'\*\*\*(\[\s*\[.*?\]\s*(?:,\s*\[.*?\]\s*)*\])\*\*\*',  # ***[nested arrays]***
-            r'\*\*\*(\[.*?\])\*\*\*',  # ***[simple array]***
-            r'(\[\s*\[.*?\]\s*(?:,\s*\[.*?\]\s*)*\])',  # Nested arrays anywhere
-            r'(\[[^\[\]]*(?:\([^)]*\)[^\[\]]*)*\])',  # Simple arrays with parentheses
-            r'\[(.*?)\]',  # Simple bracket matching (fallback)
-        ]
-
-        command_text = None
-        for i, pattern in enumerate(patterns):
-            matches = re.findall(pattern, response, re.DOTALL)
-            if matches:
-                print(f"Found match with pattern {i}: {pattern}")
-                # Take the longest match (most likely to be complete)
-                command_text = max(matches, key=len)
-                print(f"Selected match: {command_text[:100]}...")
-                break
-
-        if not command_text:
-            # Look for action-based commands as fallback
-            action_pattern = r'((?:Remove|Add|Replace|Rotate|Translate|Scale)[^.]*\.)'
-            action_matches = re.findall(action_pattern, response, re.MULTILINE | re.IGNORECASE)
-            if action_matches:
-                print(f"Found action-based commands: {action_matches}")
-                # Convert to simple command format
-                command_text = f"['{action_matches[0].split()[0]}', '{' '.join(action_matches[0].split()[1:])}']"
-            else:
-                raise ValueError(f"Could not extract commands from response")
-
-        print(f"Extracted command text: {command_text}")
-
-        # Parse the extracted command text
-        try:
-            # First try direct JSON parsing
-            try:
-                commands = json.loads(command_text)
-                print(f"Direct JSON parsing successful")
-            except json.JSONDecodeError:
-                # Try AST parsing
-                commands = ast.literal_eval(command_text)
-                print(f"AST parsing successful")
-
-        except (ValueError, SyntaxError) as e:
-            print(f"Standard parsing failed: {e}")
-
-            # Try to fix common JSON issues
-            fixed_text = command_text
-            # Fix single quotes to double quotes
-            fixed_text = re.sub(r"'([^']*)'", r'"\1"', fixed_text)
-            # Fix parentheses tuples to arrays
-            fixed_text = re.sub(r'\(([^)]*)\)', r'[\1]', fixed_text)
-
-            try:
-                commands = json.loads(fixed_text)
-                print(f"Fixed JSON parsing successful: {commands}")
-            except json.JSONDecodeError:
-                print("All parsing methods failed, trying manual extraction...")
-                raise ValueError("Could not parse command structure")
-
-    # Handle the case where AST parsing returns a tuple of commands
-    if isinstance(commands, tuple) and len(commands) >= 2:
-        # Check if this is a tuple of individual commands
-        if all(isinstance(cmd, (list, tuple)) and len(cmd) >= 2 for cmd in commands):
-            # This is a tuple of commands, convert to list
-            commands = [list(cmd) for cmd in commands]
-        else:
-            # This is a single command in tuple format
-            commands = [list(commands)]
-    elif not isinstance(commands, list):
-        commands = [commands]
-
-    # Ensure all commands are in list format
-    processed_commands = []
-    for i, cmd in enumerate(commands):
-        if isinstance(cmd, (list, tuple)):
-            processed_commands.append(list(cmd))
-        else:
-            processed_commands.append([cmd])
-
-    commands = processed_commands
-
-    # Convert to instructions
-    instructions = []
-    for cmd in commands:
-        if isinstance(cmd, (list, tuple)) and len(cmd) >= 2:
-            cmd_list = list(cmd)
-            # Convert first element to lowercase for consistency
-            cmd_list[0] = str(cmd_list[0]).lower()
-            print(f"Processing command: {cmd_list}")
-            try:
-                instruction = convert_single_plan(cmd_list)
-                instructions.append(instruction)
-                print(f"Converted to instruction: {instruction}")
-            except Exception as e:
-                print(f"Error converting command {cmd_list}: {e}")
-                # Continue with other commands instead of failing completely
-                continue
-        else:
-            print(f"Skipping invalid command (insufficient elements): {cmd}")
-
-    if not instructions:
-        raise ValueError("No valid commands could be processed")
-
-    return instructions
+# extract_commands removed - now imported from inference_utils
 
 
 def prepare_single_scene_batch(scene_data, instructions, processed_dataset):
@@ -1118,7 +607,7 @@ def prepare_single_scene_batch(scene_data, instructions, processed_dataset):
     print("Extracting object features for batch preparation...")
     try:
         # Validate feature paths first
-        validate_feature_paths()
+        validate_feature_paths(EDITROOM_DATA_FOLDER)
 
         # Extract REAL object features with NO fallbacks
         objfeat_vq_recon = []
@@ -1389,7 +878,7 @@ def generate_edited_scene(model, scene_data, processed_commands, processed_datas
 
         # Process each command sequentially
         for i, command in enumerate(processed_commands):
-            print(f"\nProcessing command {i+1}/{len(processed_commands)}: {command[:50]}...")
+            print(f"\nProcessing command {i+1}/{len(processed_commands)}: {command[:COMMAND_PREVIEW_LENGTH]}...")
 
             # Prepare batch with single command
             with tqdm(desc=f"Preparing batch for command {i+1}", unit="step") as pbar:
@@ -1572,7 +1061,7 @@ def save_results(data_tuple, output_folder, object_dataset, raw_dataset, model):
     # Check final generated scene for collisions
     try:
         # Create a temporary scene_data object for collision checking
-        from data.threed_front_scene import ThreedFutureModel
+        from src.data.threed_front_scene import ThreedFutureModel
         class TempScene:
             def __init__(self):
                 self.bboxes = []
@@ -1628,11 +1117,11 @@ def save_results(data_tuple, output_folder, object_dataset, raw_dataset, model):
 
                 with tqdm(desc="Rendering generated scene (Blender)", unit="step") as pbar:
                     get_blender_render(raw_source_scene, generate_scene_trimesh,
-                                      save_folder=generate_image_folder, verbose=False, remove_mesh=True, camera_dist=1.2)
+                                      save_folder=generate_image_folder, verbose=False, remove_mesh=True, camera_dist=DEFAULT_CAMERA_DISTANCE)
                     pbar.update(1)
             else:
                 print(f"Warning: Scene UID '{actual_scene_uid}' not found in dataset index")
-                print("Available UIDs:", list(raw_dataset.uid_to_scene_index.keys())[:5], "...")
+                print("Available UIDs:", list(raw_dataset.uid_to_scene_index.keys())[:MAX_FILE_MATCHES_DISPLAY], "...")
         except Exception as e2:
             print(f"Error in Blender rendering: {e2}")
 
@@ -1663,7 +1152,7 @@ def save_results(data_tuple, output_folder, object_dataset, raw_dataset, model):
     return {"mode": "inference_only"}
 
 
-def resolve_collisions(scene_data, max_attempts=100):
+def resolve_collisions(scene_data, max_attempts=MAX_COLLISION_RESOLUTION_ATTEMPTS):
     """
     Resolve collisions in a scene by adjusting object positions.
 
@@ -1702,7 +1191,7 @@ def resolve_collisions(scene_data, max_attempts=100):
                     direction = pos_i - pos_j
                     direction[1] = 0
 
-                    if np.linalg.norm(direction[[0, 2]]) < 0.01:
+                    if np.linalg.norm(direction[[0, 2]]) < COLLISION_SAFETY_MARGIN / 10:
 
                         angle = np.random.uniform(0, 2 * np.pi)
                         direction = np.array([np.cos(angle), 0, np.sin(angle)])
@@ -1716,18 +1205,18 @@ def resolve_collisions(scene_data, max_attempts=100):
 
 
                     separation_needed = (size_i[0] + size_j[0]) * abs(direction[0]) + \
-                                      (size_i[2] + size_j[2]) * abs(direction[2]) + 0.1
+                                      (size_i[2] + size_j[2]) * abs(direction[2]) + COLLISION_SAFETY_MARGIN
 
 
                     if j == len(resolved_scene.bboxes) - 1:
 
-                        move_distance = separation_needed * 0.6
+                        move_distance = separation_needed * COLLISION_SEPARATION_FACTOR
                         new_pos = list(pos_j + direction * move_distance)
                         new_pos[1] = obj_j.position[1]
                         obj_j.position = new_pos
                     else:
 
-                        move_distance = separation_needed * 0.6
+                        move_distance = separation_needed * COLLISION_SEPARATION_FACTOR
                         new_pos = list(pos_i - direction * move_distance)
                         new_pos[1] = obj_i.position[1]  #
                         obj_i.position = new_pos
@@ -1785,7 +1274,7 @@ def apply_collision_resolution_to_params(generate_params, object_dataset, all_cl
                 angle = bbox.z_angle
             else:
 
-                angle = 0.0
+                angle = DEFAULT_ZERO_ANGLE
 
             angle_rad = angle * np.pi / 180.0 if abs(angle) > 2*np.pi else angle
             new_angles.append([np.sin(angle_rad), np.cos(angle_rad)])
@@ -1822,7 +1311,7 @@ def main():
     try:
         # Load configurations
         with tqdm(desc="Loading configurations", unit="file") as pbar:
-            sg_config, sg2sc_config = load_configs(args.sg_config_file, args.sg2sc_config_file)
+            sg_config, sg2sc_config = load_configs(args.sg_config_file, args.sg2sc_config_file, verbose=not QUIET_MODE)
             pbar.update(1)
 
         scene_data, raw_dataset, object_dataset = load_single_scene(args.source_scene_id, args.room_type)

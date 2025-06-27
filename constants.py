@@ -21,7 +21,7 @@ print(
 )
 
 # API Keys and Paths for single scene editing
-# specify your key here
+
 BLENDER_PATH = os.getenv("BLENDER_PATH", "./blender/blender-3.3.1-linux-x64/blender")
 
 print(
