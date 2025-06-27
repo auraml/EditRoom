@@ -1,10 +1,10 @@
-# 
+#
 # Copyright (C) 2021 NVIDIA Corporation.  All rights reserved.
 # Licensed under the NVIDIA Source Code License.
 # See LICENSE at https://github.com/nv-tlabs/ATISS.
 # Authors: Despoina Paschalidou, Amlan Kar, Maria Shugrina, Karsten Kreis,
 #          Andreas Geiger, Sanja Fidler
-# 
+#
 from typing import *
 from collections import Counter
 from dataclasses import dataclass
@@ -131,7 +131,7 @@ def blender_render_scene(
             _ = subprocess.check_output(args, stderr=subprocess.STDOUT, timeout=timeout)  # return stdout
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"{exc}: {exc.output}") from exc
-        
+
 def dot(x, y):
     if isinstance(x, np.ndarray):
         return np.sum(x * y, -1, keepdims=True)
@@ -144,7 +144,7 @@ def length(x, eps=1e-20):
         return np.sqrt(np.maximum(np.sum(x * x, axis=-1, keepdims=True), eps))
     else:
         return torch.sqrt(torch.clamp(dot(x, x), min=eps))
-    
+
 def safe_normalize(x, eps=1e-20):
     return x / length(x, eps)
 
@@ -266,7 +266,7 @@ class ModelInfo(object):
 
                 self._model_info[m["model_id"]] = Asset(
                     super_cat,
-                    cat, 
+                    cat,
                     m["style"],
                     m["theme"],
                     m["material"]
@@ -372,11 +372,11 @@ class ThreedFutureModel(BaseThreedFutureModel):
     @property
     def path_to_openshape_vitg14_index(self):
         return os.path.join(INDEX_FOLDER, f"{self.model_jid}.npy")
-    
+
     @property
     def path_to_openshape_vitg14_recon(self):
         return os.path.join(RECON_FOLDER, f"{self.model_jid}.npy")
-    
+
     ################################ For InstructScene BEGIN ################################
 
     @property
@@ -427,7 +427,7 @@ class ThreedFutureModel(BaseThreedFutureModel):
     def openshape_vitg14_index(self):
         index = np.load(self.path_to_openshape_vitg14_index)
         return index
-    
+
     def openshape_vitg14_recon(self):
         recon = np.load(self.path_to_openshape_vitg14_recon).astype(np.float32)
         return recon
@@ -509,7 +509,7 @@ class ThreedFutureModel(BaseThreedFutureModel):
         )
         model.label = self.label
         return model
-    
+
     def description(self, need_all=False):
         descriptions = full_object_descriptions[self.model_jid]
         if need_all and len(descriptions) > 1:
@@ -641,7 +641,7 @@ class Room(BaseScene):
     @property
     def room_mask(self):
         return self.room_mask_rotated(0)
-    
+
     @property
     def relation_path(self):
         return os.path.join(RELATION_FOLDER, f"{self.uid}.npy")
@@ -717,7 +717,7 @@ class Room(BaseScene):
             json_path=self.json_path,
             path_to_room_masks_dir=self.path_to_room_masks_dir
         )
-    
+
     def get_room_description(self):
         total_descriptions = []
         for i, obj in enumerate(self.bboxes):
@@ -768,7 +768,7 @@ class Room(BaseScene):
                 radius=None,
                 resolution=512,
                 orthogonal_view=False):
-        
+
         trimesh_scene = trimesh.Scene(renderables)
         # combine all renderables (trimesh meshes) into a trimesh scene
         if radius is None:
@@ -778,7 +778,7 @@ class Room(BaseScene):
         cam_pose = orbit_camera(elevation, azimuth, radius, target=target)
 
         scene = pyrender.Scene.from_trimesh_scene(trimesh_scene, ambient_light=(1.0, 1.0, 1.0), bg_color=(0.5, 0.5, 0.5, 1.0))
-    
+
         mesh_renderer = pyrender.OffscreenRenderer(resolution, resolution)
         if orthogonal_view:
             camera = pyrender.OrthographicCamera(xmag=2.0, ymag=2.0, znear=0.1, zfar=100)
@@ -790,7 +790,7 @@ class Room(BaseScene):
         color, depth = mesh_renderer.render(scene)
         mesh_renderer.delete()
         return color
-    
+
     def direct_render(self, save_path,
                       elevation=0,
                 azimuth=0,
@@ -800,7 +800,7 @@ class Room(BaseScene):
         renderables = self.get_renderable_objects(with_floor_plan=False)
         img = self.render(renderables, elevation, azimuth, radius, resolution, orthogonal_view)
         return Image.fromarray(img).save(save_path)
-    
+
     def get_blender_render(self, save_folder, camera_dist=1.5, num_images=8, top_down_view=False, verbose=True):
         mesh_save_folder = os.path.join(save_folder, "mesh")
         if os.path.exists(mesh_save_folder):
@@ -809,13 +809,13 @@ class Room(BaseScene):
         generate_trimesh =self.get_renderable_objects(with_floor_plan=True)
         export_scene(mesh_save_folder, generate_trimesh)
         blender_render_scene(mesh_save_folder, save_folder, resolution_x=800, resolution_y=800, camera_dist=camera_dist, num_images=num_images, top_down_view=top_down_view, verbose=verbose)
-    
+
     def get_llm_command(self, save_folder):
         path = os.path.join(save_folder, f"{self.uid}.json")
         with open(path, "r") as f:
             command = json.load(f)
         return command
-    
+
     @staticmethod
     def get_floor_plan(
         scene,

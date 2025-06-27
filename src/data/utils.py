@@ -1,10 +1,10 @@
-# 
+#
 # Copyright (C) 2021 NVIDIA Corporation.  All rights reserved.
 # Licensed under the NVIDIA Source Code License.
 # See LICENSE at https://github.com/nv-tlabs/ATISS.
 # Authors: Despoina Paschalidou, Amlan Kar, Maria Shugrina, Karsten Kreis,
 #          Andreas Geiger, Sanja Fidler
-# 
+#
 
 from collections import defaultdict
 import numpy as np
@@ -21,7 +21,7 @@ def parse_threed_front_scenes(
     path_to_room_masks_dir=None
 ):
     preprocessed_file = os.path.join(
-        os.path.dirname(dataset_directory), "threed_front.pkl" 
+        os.path.dirname(dataset_directory), "threed_front.pkl"
     )
     if os.path.exists(preprocessed_file):
         print(f"Load pickled 3D-FRONT scenes from {preprocessed_file}")

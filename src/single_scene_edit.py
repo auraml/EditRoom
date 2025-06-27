@@ -1,45 +1,27 @@
-"""
-Single Scene Editing for EditRoom - 3D Room Layout Editing System
-
-This module provides functionality for editing individual 3D room scenes using
-AI models and LLM-based command processing. It supports natural language commands
-for manipulating furniture objects within room scenes.
-
-- Load and visualize base room scenes
-- Process natural language editing commands via LLM
-- Generate edited scenes with collision detection
-- Support for bedroom, livingroom, and diningroom scenes
-"""
-
-# Standard library imports
-import argparse
-import datetime
-import importlib.util
-import json
-import math
-import os
-import pickle
-import shutil
 import sys
-import time
-from copy import deepcopy
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, Any
-
-# Third-party imports
-import numpy as np
-import requests
-import torch
+import os
+import argparse
+import json
 import yaml
-from lightning.pytorch import seed_everything
+import pickle
+import torch
+import numpy as np
+from pathlib import Path
+import requests
+import time
+import shutil
+import datetime
+import math
+import importlib.util
+from copy import deepcopy
 from tqdm import tqdm
-
-# Optional imports with fallbacks
+from lightning.pytorch import seed_everything
 try:
     from yaml import CLoader as Loader
 except ImportError:
     from yaml import Loader
 
+# Additional imports for collision detection
 try:
     from shapely.geometry import Polygon, Point
     SHAPELY_AVAILABLE = True
@@ -54,49 +36,13 @@ except ImportError:
     SCIPY_AVAILABLE = False
     print("COLLISION_DEBUG: Warning - SciPy not available, some collision functions may not work")
 
-# Local imports
-from constants import EDIT_DATA_FOLDER, EDITROOM_DATA_FOLDER, OPENAI_API_KEY, BLENDER_PATH
-from data.threed_front import ThreedFront
-from data.utils_data import get_dataset
 from models.room_edit import RoomEdit
-from utils.util import construct_scene_from_vq_objdata, get_blender_render, render_generated_scene
+from data.utils_data import get_dataset
+from data.threed_front import ThreedFront
 from utils.visualize import export_scene
+from utils.util import construct_scene_from_vq_objdata, get_blender_render, render_generated_scene
 
-# Constants for magic numbers
-# Import shared constants from tools.constants  
-from tools.constants import (
-    API_RETRY_COUNT,
-    ANGLE_THRESHOLD_OBVIOUS,
-    ANGLE_THRESHOLD_SLIGHT, 
-    SCALE_THRESHOLD_OBVIOUS_UP,
-    SCALE_THRESHOLD_OBVIOUS_DOWN,
-    DISTANCE_THRESHOLD_OBVIOUS,
-    DISTANCE_THRESHOLD_SLIGHT,
-    MAX_COLLISION_RESOLUTION_ATTEMPTS,
-    COLLISION_SEPARATION_FACTOR,
-    COLLISION_SAFETY_MARGIN,
-    DEFAULT_ZERO_ANGLE
-)
-
-# Single scene edit specific constants
-MAX_COLLISION_DISPLAY = 3
-MAX_FILE_MATCHES_DISPLAY = 5
-DEFAULT_CAMERA_DISTANCE = 1.2
-MAX_TOKENS = 2048
-COORDINATE_NORMALIZATION_THRESHOLD = 1.0
-COMMAND_PREVIEW_LENGTH = 50
-STRING_PREVIEW_LENGTH = 100
-
-# Configuration constants
-DEFAULT_SEED = 42
-DEFAULT_OUTPUT_DIRECTORY = "single_scene_results"
-VALID_ROOM_TYPES = ["bedroom", "livingroom", "diningroom"]
-MAX_OBJECTS_BY_ROOM = {
-    'bedroom': 12,
-    'livingroom': 21,
-    'diningroom': 21
-}
-EDIT_SUFFIXES = ['_pose-', '_remove-', '_add-', '_replace-']
+from constants import EDIT_DATA_FOLDER, EDITROOM_DATA_FOLDER, OPENAI_API_KEY, BLENDER_PATH
 
 # COLLISION DETECTION DEBUGGING: Import collision functions from tools
 tools_path = os.path.join(os.path.dirname(__file__), '..', 'tools')
@@ -118,9 +64,6 @@ try:
     two_rectangle_collision = tools_utils.two_rectangle_collision
     check_collision = tools_utils.check_collision
     check_collision_all = tools_utils.check_collision_all
-    # Import improved shared functions
-    convert_single_plan = tools_utils.convert_single_plan
-    call_llm_api = tools_utils.call_llm_api
     COLLISION_DETECTION_AVAILABLE = True
     print("Collision detection enabled")
 except ImportError as e:
@@ -171,7 +114,7 @@ def debug_check_scene_collisions(scene_data, step_description="", verbose=True):
             if not hasattr(obj, 'position') or not hasattr(obj, 'size'):
                 continue
             if not hasattr(obj, 'z_angle'):
-                obj.z_angle = DEFAULT_ZERO_ANGLE
+                obj.z_angle = 0.0
 
         # Check all pairs for collisions
         collision_found = check_collision_all(scene_data)
@@ -191,10 +134,8 @@ def debug_check_scene_collisions(scene_data, step_description="", verbose=True):
 
         if verbose:
             if collision_found:
-                collision_msg = (f"[{step_description}] COLLISION DETECTED: {len(collision_pairs)} "
-                                f"collision(s) detected among {len(scene_data.bboxes)} objects")
-                print(collision_msg)
-                for i, j, obj1, obj2 in collision_pairs[:MAX_COLLISION_DISPLAY]:  # Show max 3 collisions
+                print(f"[{step_description}] COLLISION DETECTED: {len(collision_pairs)} collision(s) detected among {len(scene_data.bboxes)} objects")
+                for i, j, obj1, obj2 in collision_pairs[:3]:  # Show max 3 collisions
                     print(f"  - {obj1.label} ↔ {obj2.label}")
             else:
                 print(f"[{step_description}] NO COLLISIONS: ({len(scene_data.bboxes)} objects)")
@@ -231,7 +172,7 @@ def qprint(*args, **kwargs):
 
 def extract_base_scene_id(scene_id):
 
-    suffixes = EDIT_SUFFIXES
+    suffixes = ['_pose-', '_remove-', '_add-', '_replace-']
     base_id = scene_id
 
     for suffix in suffixes:
@@ -266,7 +207,7 @@ def find_base_scene(base_scene_id, test_dataset_folder):
 
 
     qprint(f"Exact match not found, searching for base scene pattern...")
-    edit_suffixes = EDIT_SUFFIXES
+    edit_suffixes = ['_pose-', '_remove-', '_add-', '_replace-']
 
     for filename in os.listdir(test_dataset_folder):
         if filename.startswith(base_scene_id) and filename.endswith('.pkl'):
@@ -281,7 +222,7 @@ def find_base_scene(base_scene_id, test_dataset_folder):
     matching_files = [f for f in os.listdir(test_dataset_folder) if f.startswith(base_scene_id) and f.endswith('.pkl')]
     if matching_files:
         qprint(f"Found {len(matching_files)} files matching pattern:")
-        for f in matching_files[:MAX_FILE_MATCHES_DISPLAY]:  # Show first 5 matches
+        for f in matching_files[:5]:  # Show first 5 matches
             qprint(f"  - {f}")
         # Use the first match as fallback
         fallback_path = os.path.join(test_dataset_folder, matching_files[0])
@@ -368,7 +309,7 @@ def parse_arguments():
     parser.add_argument("--source_scene_id", required=True,
                        help="Source scene UID (without .pkl extension)")
     parser.add_argument("--room_type", required=True,
-                       choices=VALID_ROOM_TYPES,
+                       choices=["bedroom", "livingroom", "diningroom"],
                        help="Room type")
     parser.add_argument("--sg_config_file", required=True,
                        help="Path to scene graph config file")
@@ -378,11 +319,11 @@ def parse_arguments():
                        help="Path to scene graph model weights")
     parser.add_argument("--sg2sc_weight_file", required=True,
                        help="Path to scene graph to scene model weights")
-    parser.add_argument("--output_directory", default=DEFAULT_OUTPUT_DIRECTORY,
+    parser.add_argument("--output_directory", default="single_scene_results",
                        help="Output directory for results")
     parser.add_argument("--no_edit", action="store_true",
                        help="Only visualize original scene")
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
+    parser.add_argument("--seed", type=int, default=42,
                        help="Random seed")
     parser.add_argument("--quiet", action="store_true",
                        help="Suppress verbose output and debug messages")
@@ -503,8 +444,7 @@ def validate_coordinates(scene_params, raw_dataset):
     qprint(f"Translation range: [{np.min(translations):.3f}, {np.max(translations):.3f}]")
     qprint(f"Size range: [{np.min(sizes):.3f}, {np.max(sizes):.3f}]")
 
-    if (np.all(np.abs(translations) <= COORDINATE_NORMALIZATION_THRESHOLD) and
-        np.all(sizes <= COORDINATE_NORMALIZATION_THRESHOLD)):
+    if np.all(np.abs(translations) <= 1.0) and np.all(sizes <= 1.0):
         print("WARNING: Detected normalized coordinates, denormalizing...")
 
         if hasattr(raw_dataset, 'centroids') and hasattr(raw_dataset, 'sizes'):
@@ -728,7 +668,7 @@ def viz_org_scene(scene_data, raw_dataset, object_dataset, output_folder):
     try:
         with tqdm(desc="Rendering scene", unit="step") as pbar:
             get_blender_render(scene_data, scene_trimesh,
-                              save_folder=original_folder, verbose=False, remove_mesh=True, camera_dist=DEFAULT_CAMERA_DISTANCE)
+                              save_folder=original_folder, verbose=False, remove_mesh=True, camera_dist=1.2)
             pbar.update(1)
         print(f"Original scene visualization saved to: {original_folder}")
     except Exception as e:
@@ -813,12 +753,158 @@ def construct_plan_prompt(source_scene, instruction, class_labels, use_image=Fal
                 "content": content
             }
         ],
-        "max_tokens": MAX_TOKENS
+        "max_tokens": 2048
     }
     return message
 
 
+def call_llm_api(message, retries=3):
 
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENAI_API_KEY}"
+    }
+
+    for i in range(retries):
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions",
+                                   headers=headers, json=message, timeout=60)
+            response_data = response.json()
+
+            if 'choices' in response_data:
+                return response_data['choices'][0]['message']['content']
+            else:
+                print(f"API call failed: {response_data}")
+                if i < retries - 1:
+                    time.sleep(2**i)
+        except Exception as e:
+            print(f"API call error: {e}")
+            if i < retries - 1:
+                time.sleep(2**i)
+
+    return None
+
+
+def convert_single_plan(plan):
+    """
+    Converts single plan to instruction format.
+    """
+    def add_relative(relative):
+        direction = relative[0]
+        target = relative[1]
+        if "right" in direction:
+            relative = "right of"
+        elif "left" in direction:
+            relative = "left of"
+        elif "front" in direction:
+            relative = "in front of"
+        else:
+            relative = direction
+
+        if "closely" in direction and not "closely" in relative:
+            relative = "closely " + relative
+
+        return f"location: ***{relative}*** {target}"
+
+    if plan[0] == "add":
+        assert len(plan) == 3, "The add plan should have 3 elements"
+        target = plan[1]
+        relative = plan[2]
+        # Handle both tuple and list formats for relative descriptions
+        if isinstance(relative, (list, tuple)) and len(relative) == 2:
+            relative_des = add_relative(relative)
+            instruction = f"add object: {target}; {relative_des}."
+        else:
+            instruction = f"add object: {target}."
+    elif plan[0] == "remove":
+        assert len(plan) in [2, 3], "The remove plan should have 2 or 3 elements"
+        target = plan[1]
+        if len(plan) == 3:
+            relative = plan[2]
+            # Handle both tuple and list formats for relative descriptions
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction = f"remove object: {target}; {relative_des}."
+            else:
+                instruction = f"remove object: {target}."
+        else:
+            instruction = f"remove object: {target}."
+    elif plan[0] == "translate":
+        assert len(plan) in [4, 5], "The translate plan should have 4 or 5 elements"
+        target = plan[1]
+        direction = plan[2]
+        distance = plan[3]
+        assert direction in ['x', 'z'], "The direction should be x or z"
+        assert type(distance) in [int, float], "The distance should be a number"
+        direction_dict = {
+            "x": "left" if distance < 0 else "right",
+            "z": "front" if distance < 0 else "back",
+        }
+        distance = abs(distance)
+        instruction = f"move object towards the ***{direction_dict[direction]}*** direction for {distance:.2f} meters: {target}"
+        if distance > 1:
+            instruction = "obviously " + instruction
+        elif distance < 0.5:
+            instruction = "slightly " + instruction
+
+        if len(plan) == 5:
+            relative = plan[4]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    elif plan[0] == "rotate":
+        assert len(plan) in [3, 4], "The rotate plan should have 3 or 4 elements"
+        target = plan[1]
+        angle = plan[2]
+        assert type(angle) in [int, float], "The angle should be a number"
+        if abs(angle) >= 135:
+            instruction = f"obviously rotate object {angle:.0f} degrees: {target}"
+        elif abs(angle) <= 45:
+            instruction = f"slightly rotate object {angle:.0f} degrees: {target}"
+        else:
+            instruction = f"rotate object {angle:.0f} degrees: {target}"
+        if len(plan) == 4:
+            relative = plan[3]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    elif plan[0] == 'scale':
+        assert len(plan) in [3, 4], "The scale plan should have 3 or 4 elements"
+        target = plan[1]
+        scale = plan[2]
+        assert type(scale) in [int, float], "The scale should be a number"
+        if scale > 1:
+            instruction = f"enlarge object by {scale:.1f} X: {target}"
+            if scale > 1.3:
+                instruction = "obviously " + instruction
+        elif scale < 1:
+            instruction = f"shrink object by {scale:.1f} X: {target}"
+            if scale < 0.7:
+                instruction = "obviously " + instruction
+        else:
+            instruction = None
+        if len(plan) == 4:
+            relative = plan[3]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    elif plan[0] == 'replace':
+        assert len(plan) in [3, 4], "The replace plan should have 3 or 4 elements"
+        source = plan[1]
+        target = plan[2]
+        instruction = f"replace source with target : [Source] {source}; [Target] {target}"
+        if len(plan) == 4:
+            relative = plan[3]
+            if isinstance(relative, (list, tuple)) and len(relative) == 2:
+                relative_des = add_relative(relative)
+                instruction += f"; {relative_des}."
+    else:
+        raise ValueError(f"Invalid plan action: {plan}")
+
+    assert instruction is not None, "Cannot process the instruction. Please check the plan."
+    if instruction[-1] == "." and instruction[-2] == ".":
+        instruction = instruction[:-1]
+    return instruction
 
 
 def process_command(scene_data, command, class_labels):
@@ -834,7 +920,7 @@ def process_command(scene_data, command, class_labels):
     # Calling LLM API
     print("Calling OpenAI API...")
     with tqdm(desc="Calling OpenAI API", unit="request") as pbar:
-        response = call_llm_api(message, OPENAI_API_KEY)
+        response = call_llm_api(message)
         if response is None:
             raise RuntimeError("Failed to get response from OpenAI API")
         pbar.update(1)
@@ -896,7 +982,7 @@ def extract_commands(response):
                 print(f"Found match with pattern {i}: {pattern}")
                 # Take the longest match (most likely to be complete)
                 command_text = max(matches, key=len)
-                print(f"Selected match: {command_text[:STRING_PREVIEW_LENGTH]}...")
+                print(f"Selected match: {command_text[:100]}...")
                 break
 
         if not command_text:
@@ -1109,10 +1195,12 @@ def prepare_single_scene_batch(scene_data, instructions, processed_dataset):
                 room_type = 'diningroom'
 
         # Sets max_objects based on room type
-        if room_type and room_type in MAX_OBJECTS_BY_ROOM:
-            max_objects = MAX_OBJECTS_BY_ROOM[room_type]
+        if room_type and 'bedroom' in room_type:
+            max_objects = 12
+        elif room_type and ('livingroom' in room_type or 'diningroom' in room_type):
+            max_objects = 21
         else:
-            max_objects = MAX_OBJECTS_BY_ROOM['bedroom']  # Default fallback
+            max_objects = 12
 
     print(f"Using max_objects={max_objects} (from model training configuration)")
 
@@ -1279,7 +1367,7 @@ def generate_edited_scene(model, scene_data, processed_commands, processed_datas
     For multiple commands, processes them sequentially where each command's
     output becomes the input for the next command.
 
-    If output_folder, object_dataset, and raw_dataset are provided,
+    NEW: If output_folder, object_dataset, and raw_dataset are provided,
     intermediate scenes will be saved in edit_1/, edit_2/, ..., edit_N/ subdirectories.
     """
     print("Generating edited scene...")
@@ -1301,7 +1389,7 @@ def generate_edited_scene(model, scene_data, processed_commands, processed_datas
 
         # Process each command sequentially
         for i, command in enumerate(processed_commands):
-            print(f"\nProcessing command {i+1}/{len(processed_commands)}: {command[:COMMAND_PREVIEW_LENGTH]}...")
+            print(f"\nProcessing command {i+1}/{len(processed_commands)}: {command[:50]}...")
 
             # Prepare batch with single command
             with tqdm(desc=f"Preparing batch for command {i+1}", unit="step") as pbar:
@@ -1540,11 +1628,11 @@ def save_results(data_tuple, output_folder, object_dataset, raw_dataset, model):
 
                 with tqdm(desc="Rendering generated scene (Blender)", unit="step") as pbar:
                     get_blender_render(raw_source_scene, generate_scene_trimesh,
-                                      save_folder=generate_image_folder, verbose=False, remove_mesh=True, camera_dist=DEFAULT_CAMERA_DISTANCE)
+                                      save_folder=generate_image_folder, verbose=False, remove_mesh=True, camera_dist=1.2)
                     pbar.update(1)
             else:
                 print(f"Warning: Scene UID '{actual_scene_uid}' not found in dataset index")
-                print("Available UIDs:", list(raw_dataset.uid_to_scene_index.keys())[:MAX_FILE_MATCHES_DISPLAY], "...")
+                print("Available UIDs:", list(raw_dataset.uid_to_scene_index.keys())[:5], "...")
         except Exception as e2:
             print(f"Error in Blender rendering: {e2}")
 
@@ -1575,7 +1663,7 @@ def save_results(data_tuple, output_folder, object_dataset, raw_dataset, model):
     return {"mode": "inference_only"}
 
 
-def resolve_collisions(scene_data, max_attempts=MAX_COLLISION_RESOLUTION_ATTEMPTS):
+def resolve_collisions(scene_data, max_attempts=100):
     """
     Resolve collisions in a scene by adjusting object positions.
 
@@ -1583,10 +1671,12 @@ def resolve_collisions(scene_data, max_attempts=MAX_COLLISION_RESOLUTION_ATTEMPT
     if not COLLISION_DETECTION_AVAILABLE:
         return scene_data
 
+
     initial_collisions = debug_check_scene_collisions(scene_data, "BEFORE_RESOLUTION", verbose=True)
 
     if not initial_collisions:
         return scene_data
+
 
     from copy import deepcopy
     resolved_scene = deepcopy(scene_data)
@@ -1595,6 +1685,7 @@ def resolve_collisions(scene_data, max_attempts=MAX_COLLISION_RESOLUTION_ATTEMPT
     while attempts < max_attempts:
         attempts += 1
         collision_found = False
+
 
         for i in range(len(resolved_scene.bboxes)):
             for j in range(i + 1, len(resolved_scene.bboxes)):
@@ -1606,33 +1697,37 @@ def resolve_collisions(scene_data, max_attempts=MAX_COLLISION_RESOLUTION_ATTEMPT
 
                     pos_i = np.array(obj_i.position)
                     pos_j = np.array(obj_j.position)
-                    
+
+
                     direction = pos_i - pos_j
                     direction[1] = 0
 
-                    if np.linalg.norm(direction[[0, 2]]) < COLLISION_SAFETY_MARGIN / 10:
+                    if np.linalg.norm(direction[[0, 2]]) < 0.01:
 
                         angle = np.random.uniform(0, 2 * np.pi)
                         direction = np.array([np.cos(angle), 0, np.sin(angle)])
                     else:
                         direction = direction / np.linalg.norm(direction)
 
+
+
                     size_i = np.array(obj_i.size)
                     size_j = np.array(obj_j.size)
 
 
                     separation_needed = (size_i[0] + size_j[0]) * abs(direction[0]) + \
-                                      (size_i[2] + size_j[2]) * abs(direction[2]) + COLLISION_SAFETY_MARGIN
-                                      
+                                      (size_i[2] + size_j[2]) * abs(direction[2]) + 0.1
+
+
                     if j == len(resolved_scene.bboxes) - 1:
 
-                        move_distance = separation_needed * COLLISION_SEPARATION_FACTOR
+                        move_distance = separation_needed * 0.6
                         new_pos = list(pos_j + direction * move_distance)
                         new_pos[1] = obj_j.position[1]
                         obj_j.position = new_pos
                     else:
 
-                        move_distance = separation_needed * COLLISION_SEPARATION_FACTOR
+                        move_distance = separation_needed * 0.6
                         new_pos = list(pos_i - direction * move_distance)
                         new_pos[1] = obj_i.position[1]  #
                         obj_i.position = new_pos
@@ -1690,7 +1785,7 @@ def apply_collision_resolution_to_params(generate_params, object_dataset, all_cl
                 angle = bbox.z_angle
             else:
 
-                angle = DEFAULT_ZERO_ANGLE
+                angle = 0.0
 
             angle_rad = angle * np.pi / 180.0 if abs(angle) > 2*np.pi else angle
             new_angles.append([np.sin(angle_rad), np.cos(angle_rad)])

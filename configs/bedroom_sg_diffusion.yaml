@@ -10,6 +10,8 @@ data:
     train_stats: "dataset_stats.txt"
     room_layout_size: "64,64"
     max_length: 12
+    dataset_directory: "./datasets/editroom_dataset/threed_front_bedroom"
+
 
 model:
     name: "sg_model"
