@@ -8,6 +8,24 @@ The created dataset will be saved under `EDIT_DATA_FOLDER` in [constants.py](../
 ```bash
 PYTHONPATH=. python3 tools/edit_data_generator.py --room_type bedroom --num_max_pre_room 20
 ```
+
+**Note:** After executing the first command, the following files will be automatically unzipped:
+- `datasets/objfeat_vqvae.zip` will be unzipped to `datasets/data2/kzheng31/EditRoom_Public/objfeat_vqvae` 
+- `datasets/preprocess.zip` will be unzipped to `datasets/data2/zhengkz/3D_datasets/preprocess`
+
+However, both `objfeat_vqvae` and `preprocess` folders need to be directly under the `datasets` folder to comply with the required directory structure. Please run the following commands from the root directory to move them to the correct locations:
+
+```bash
+# Move objfeat_vqvae folder to datasets/
+mv datasets/data2/kzheng31/EditRoom_Public/objfeat_vqvae datasets/
+# Move preprocess folder to datasets/
+mv datasets/data2/zhengkz/3D_datasets/preprocess datasets/
+
+# Verify the folders are in the correct locations
+ls -la datasets/objfeat_vqvae
+ls -la datasets/preprocess
+```
+
 Edit pair generation time for one room type : 5-10 mins
 The room type also can be `diningroom` or `livingroom`. If you change to those rooms, please set `num_max_pre_room` to a larger number, like `40`, since those rooms have less configurations but have more furnitures per room
 

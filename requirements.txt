@@ -18,3 +18,4 @@ open_clip_torch
 wandb
 openai
 accelerate
+huggingface_hub
