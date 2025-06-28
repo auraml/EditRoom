@@ -20,7 +20,7 @@ from sentence_transformers import SentenceTransformer
 from constants import EDITROOM_DATA_FOLDER
 
 class RoomEdit(LightningModule):
-    def __init__(self, sg_config, sg2sc_config, num_objs, num_preds, pred_save_folder=None, 
+    def __init__(self, sg_config, sg2sc_config, num_objs, num_preds, pred_save_folder=None,
                  postprocess_func=None, object_dataset=None, raw_dataset=None, all_classes=None) -> None:
         super().__init__()
         self.num_objs = num_objs
@@ -31,8 +31,13 @@ class RoomEdit(LightningModule):
         sg_load_path = sg_config['load_path']
         sg2sc_load_path = sg2sc_config['load_path']
 
-        self.sg_model = SgObjfeatVQDiffusionEdit.load_from_checkpoint(sg_load_path, strict=False, map_location="cpu", config=sg_config, num_objs=num_objs, num_preds=num_preds)
-        self.sg2sc_model = Sg2ScDiffusionEdit.load_from_checkpoint(sg2sc_load_path, strict=False, map_location="cpu", config=sg2sc_config, num_objs=num_objs, num_preds=num_preds)
+        # Suppress checkpoint loading warnings
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Found keys that are in the model state dict but not in the checkpoint")
+            warnings.filterwarnings("ignore", category=UserWarning, module="lightning.pytorch.core.saving")
+            self.sg_model = SgObjfeatVQDiffusionEdit.load_from_checkpoint(sg_load_path, strict=False, map_location="cpu", config=sg_config, num_objs=num_objs, num_preds=num_preds)
+            self.sg2sc_model = Sg2ScDiffusionEdit.load_from_checkpoint(sg2sc_load_path, strict=False, map_location="cpu", config=sg2sc_config, num_objs=num_objs, num_preds=num_preds)
         print("Models loaded successfully")
 
         model_folder = os.path.join(EDITROOM_DATA_FOLDER, "objfeat_vqvae")
@@ -51,7 +56,7 @@ class RoomEdit(LightningModule):
         self.desc_emb_model = SentenceTransformer("all-MiniLM-L6-v2")
         self.lpips = LearnedPerceptualImagePatchSimilarity()
         self.clip_image = CLIPImageEncoder()
-    
+
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
         # assert self.pred_save_folder is not None, "Please provide a folder to save predictions"
         source_params = batch['sources']
@@ -126,7 +131,7 @@ class RoomEdit(LightningModule):
         for k, v in targets.items():
             if isinstance(v, torch.Tensor):
                 targets[k] = v.detach().cpu().numpy()
-                
+
         generated_boxes = generated_boxes.detach().cpu().numpy()
         generated_mask = generated_mask.detach().cpu().numpy()
         generated_x = generated_x.detach().cpu().numpy()
@@ -143,7 +148,7 @@ class RoomEdit(LightningModule):
 
             for k, v in sources.items():
                 source_i[k] = v[i]
-            
+
             for k, v in targets.items():
                 target_i[k] = v[i]
 
@@ -169,7 +174,7 @@ class RoomEdit(LightningModule):
             torch.save(data_i, save_path)
             self.postprocess_generation(data_i, save_folder)
         return all_data
-    
+
     def generate_single(self, condition_params, instructions):
         batch_size = len(instructions)
         generated_x, generated_e, generated_token_o = self.sg_model.generate_samples(batch_size, self.max_length, condition_params, instructions, cfg_scale=1.5, source_cfg_scale=2.0)
@@ -192,7 +197,7 @@ class RoomEdit(LightningModule):
             boxes = new_boxes
         else:
             boxes = samples['boxes']
-        
+
         boxes = boxes[mask]
         objs = samples['objs'][mask]
         objfeat_vq_recon = samples['objfeat_vq_recon'][mask]
@@ -209,9 +214,9 @@ class RoomEdit(LightningModule):
         }
         if 'jids' in samples.keys():
             return_dict['jids']=samples['jids']
-        
+
         return return_dict
-    
+
     def process_with_source(self, generate_recon, source_recon, generated_mask, source_mask, instructions):
 
         norm_generate_recon = torch.nn.functional.normalize(generate_recon, p=2, dim=-1)
@@ -255,7 +260,7 @@ class RoomEdit(LightningModule):
             generate_recon[i][generated_mask_i] = orig_generate_recon_i
 
         return generate_recon
-    
+
     def get_cloest_furniture(self, generated_mask, generate_recon, generated_x):
         generated_o_vitg14_features = torch.zeros_like(generate_recon)
         for b in range(len(generated_mask)):
@@ -269,9 +274,9 @@ class RoomEdit(LightningModule):
                     objfeat_vitg14_features = torch.tensor(objfeat_vitg14_features).to(self.device)
                     generated_o_vitg14_features[b][i] = objfeat_vitg14_features
         return generated_o_vitg14_features
-                    
+
     def postprocess_generation(self, data, save_folder):
-        
+
         source_params, target_params, generate_params, instructions = data
 
 
@@ -302,7 +307,7 @@ class RoomEdit(LightningModule):
         instruction_save_path = os.path.join(save_folder, "instruction.json")
         with open(instruction_save_path, "w") as f:
             f.write(json.dumps(instructions))
-        
+
         score_save_path = os.path.join(save_folder, "scores.json")
         with open(score_save_path, "w") as f:
             f.write(json.dumps(iou_scores))
@@ -344,7 +349,7 @@ class RoomEdit(LightningModule):
             'class_iou': float(np.mean(score_class_paired))
         }
         return scores
-    
+
     def calculate_image_similarity(self, target_image_folder, pred_image_folder):
         totensor = PILToTensor()
 
@@ -383,4 +388,3 @@ class RoomEdit(LightningModule):
         return scores
 
 
-        

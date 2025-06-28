@@ -6,10 +6,11 @@ We need to first create scene editing pairs with template commands and then conv
 The created dataset will be saved under `EDIT_DATA_FOLDER` in [constants.py](../constants.py). Please change it if you want another folder.
 
 ```bash
-python3 --room_type bedroom --num_max_pre_room 20
+PYTHONPATH=. python3 tools/edit_data_generator.py --room_type bedroom --num_max_pre_room 20
 ```
 
-The room type also can be `diningroom` or `livingroom`. If you change to those rooms, please set `num_max_pre_room` to a larger number, like `40`, since those rooms have less configurations but have more furnitures per room.
+Edit pair generation time for one room type : 5-10 mins
+The room type also can be `diningroom` or `livingroom`. If you change to those rooms, please set `num_max_pre_room` to a larger number, like `40`, since those rooms have less configurations but have more furnitures per room
 
 ## 2. Creating LLM Commands
 

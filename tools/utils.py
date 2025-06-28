@@ -11,7 +11,7 @@ import re
 from openai import OpenAI
 
 def preprocess_edits(dataset, obj_dataset, num_max_pre_room = 10):
-    # add modified scenes of object replace and pose change operations to the original scene list, record numbers    
+    # add modified scenes of object replace and pose change operations to the original scene list, record numbers
     dataset.n_original_scenes = len(dataset.scenes)
     obj_dictbylabel = {}
     objmodeljid_set = set()
@@ -67,7 +67,7 @@ def preprocess_edits(dataset, obj_dataset, num_max_pre_room = 10):
 
                 if current_room_count >= num_max_pre_room:
                     break
-        
+
     if len(dataset.scenes) != dataset.n_original_scenes:
         dataset.scenes = dataset.scenes[:dataset.n_original_scenes]
     dataset.n_add_remove_scenes = len(add_remove_scene_list)
@@ -106,7 +106,7 @@ def get_opposite_data(original_scene, edit_scene, change_number=None):
         pattern = r'\[JID\](.*?)\[/JID\]'
         jids = re.findall(pattern, edit_command)
         edit_command = edit_command.replace(f"[Source] [JID]{jids[0]}[/JID]; [Target] [JID]{jids[1]}[/JID]", f"[Source] [JID]{jids[1]}[/JID]; [Target] [JID]{jids[0]}[/JID]")
-    
+
     opposite_scene.uid = edit_scene.uid+'-opposite'
     opposite_scene.command = edit_command
     return opposite_scene
@@ -118,7 +118,7 @@ def add_localization(current_scene):
         jid = obj.model_jid
         if (all_jids==obj.model_jid).sum() == 1:
             unqiue_obj_dict[jid] = [obj.corners(), obj.label]
-    
+
     relation_dicts = {}
     for i, obj in enumerate(current_scene.bboxes):
         jid = obj.model_jid
@@ -197,7 +197,7 @@ def compute_loc_rel(corners1: ndarray, corners2: ndarray, name1: str, name2: str
         return p, distance
 
 def two_rectangle_collision(rect1, rect2):
-    '''using Separating Axis Theorem''' 
+    '''using Separating Axis Theorem'''
     # input format: corner coordinate arrays
     def get_corners(obj):
         corners = []
@@ -222,7 +222,7 @@ def two_rectangle_collision(rect1, rect2):
             edge = corners[i] - corners[i - 1]
             normal = (-edge[1], edge[0])
             axes.append(normal)
-    
+
     # Test projections on all axes
     for axis in axes:
         min1, max1 = project_rectangle_on_axis(rect1, axis)
@@ -230,7 +230,7 @@ def two_rectangle_collision(rect1, rect2):
         # If there is no overlap on any axis, the rectangles do not collide
         if max1 < min2 or max2 < min1:
             return False
-    
+
     # check whether their heights overlap
     min1, max1 = rect1.position[1] - rect1.size[1] / 2, rect1.position[1] + rect1.size[1] / 2
     if min1 < 0:
@@ -314,7 +314,7 @@ def object_replace(scene, id, obj_i, obj_dictbylabel, render=False, trytimes=10,
     if success and render:
         render_scene(f'{id:06d}-replace-{obj_class_str}-', scene)
     return success, mscene
-    
+
 def pose_change(scene, id, obj_i, mode=0, render=False, relation_dicts=None, fixed_rotate=False, fixed_scale=False):
     '''
     scale/translate/rotate object by a certain amount, avoid collision if possible, otherwise find cases only collide with one object and move away that object and repeat process on that object

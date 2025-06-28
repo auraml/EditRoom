@@ -18,4 +18,5 @@ open_clip_torch
 wandb
 openai
 accelerate
-flash-attn --no-build-isolation
+huggingface_hub
+python-dotenv

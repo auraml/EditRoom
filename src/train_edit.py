@@ -112,7 +112,7 @@ def main(argv):
         # val_dataset = torch.load(val_data_tmp)
         with open(val_data_tmp, 'rb') as f:
             val_dataset = pickle.load(f)
-    
+
     val_dataloader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=batch_size,
@@ -135,7 +135,7 @@ def main(argv):
                 monitor="val_loss",
                 save_top_k=2,
             )
-    
+
     wandb_logger = WandbLogger(name=model_save_name, save_dir=args.output_directory, project="InstrucScene", offline=False, tags=[args.experiment_tag]) if args.with_wandb_logger else None
     trainer = Trainer(
         devices=device_num,

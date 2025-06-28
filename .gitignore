@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
+datasets/
+single_scene_results/
+weights/
+weights_/
 
 # C extensions
 *.so

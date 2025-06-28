@@ -41,7 +41,7 @@ def get_llm_command(scene_data_folder, splits=["train", "test"], prompt_num_limi
             message = construct_prompt(source_scene, scene, objects_dataset)
             batch_element = construct_batch_element(message, scene.uid)
             batch_prompts.append(batch_element)
-        
+
         if len(batch_prompts) > prompt_num_limit:
             part_number = math.ceil(len(batch_prompts) / prompt_num_limit)
             part_size = len(batch_prompts) // part_number
@@ -68,7 +68,7 @@ def construct_prompt(source_scene, target_scene, object_dataset):
 
     scene_description = source_scene.get_room_description()
     instruction = target_scene.command
-    
+
     all_descriptions = []
     for instruc in instruction.split("[JID]"):
         if "[/JID]" in instruc:
@@ -80,13 +80,13 @@ def construct_prompt(source_scene, target_scene, object_dataset):
             all_descriptions.append(instruc.replace(f"{obj_jid}[/JID]", description))
         else:
             all_descriptions.append(instruc)
-    
+
     instruction = "".join(all_descriptions)
     instruction += "."
     instruction = instruction.split('\n')
 
     target_object_index = target_scene.uid.split("_")[-2].split("-")[-1]
-    
+
     system_prompt = "Given scene configurations and templated commands, you should write new commands using natural language and spatial referring.\n" + \
         "Templated commands will be in the 'action: target_object' format. If the location is provided in the templated commands, it can be considered as a hint for the target object's location compared to the existing object in the scene.\n" + \
         "All sizes and centroids in scene configurations are in meters. The angles are defined in degrees. The dimension sequence is [x,y,z]. Vertical angles are the angles along the y-axis.\n"+ \
@@ -115,12 +115,12 @@ def construct_prompt(source_scene, target_scene, object_dataset):
         "If there is a wardrobe in the scene, you can write: [\"add a white bed on the right side of the wardrobe.\"]\n" + \
         "Now you can start to design new commands based on the scene configurations and templated commands. You can supplement object descriptions on the command.\n" + \
         "Think about it step by step and summarize your commands in the end. The final output format should be '###[natural command 1, natural command 2, ...]###', which is a list of strings and can be processed by ast.literal_eval() or json.loads().\n"
-    
+
     prompt = "[Scene configurations]:\n" + scene_description + "\n" + \
         "[Templated commands]:" + json.dumps(instruction) + "\n" + \
         f"Hint: The target object is the Object_{target_object_index}.\n\n" +\
         "Think about it step by step and summarize your commands in the end. The final output format should be '###[natural command 1, natural command 2, ...]###', which is a list of strings.\n"
-    
+
     message = {
         "model": "gpt-4o",
         "messages": [
@@ -138,7 +138,7 @@ def construct_prompt(source_scene, target_scene, object_dataset):
                     ]
             }
         ],
-        "max_tokens": 2048
+        "max_tokens": 4096
     }
     return message
 
@@ -198,7 +198,7 @@ def process_natural_command(data_file):
             to_llm_process.append((k, v))
         else:
             processed_all_data[k] = valid_response
-    
+
     messages = [
             {"role": "system", "content": "Directly extract the natural command from the input. Ingore the analyze inside the input. Remove the exact location number inside the command, like [2.47, -3.71]. Remove object pronoun inside the command, like (object 0) Output format should be a list of strings."},
             {"role": "user", "content": """Input: Given the scene configurations and the templated commands, we see that the target object is Object 2: the nightstand, described as "a modern, sleek, and minimalist gray rectangular box with a flat top and bottom."\n\nNext, let\'s consider how we can reference the nightstand based on its relations with other objects in the scene.\n\n- Object 0 (double_bed) is located at [1.77, 0.0, 3.19], which is towards the front relative to the coordinate origin.\n- Object 1 (wardrobe) is at [1.99, 0.0, 1.59], on the front and similar right relative position.\n- Object 2 (nightstand) is at [2.65, 0.0, 4.41], in front and towards the right of the bed (Object 0).\n- Object 3 (pendant_lamp) is above all the objects at [1.5, 2.03, 2.96].\n\nWe can create a natural language command for rotating the nightstand (Object 2) by referring to its relative position to the bed (Object 0) since there are no duplicate target objects.\n\nThe templated commands hint at rotating the nightstand by ±30 degrees.\n\nHere\'s a natural command based on the scene.\n\n###["Rotate the modern, sleek, and minimalist gray nightstand 30 degrees towards the right, keeping it in its position next to the bed."]###\n\nThis command leverages the relational position to the bed (Object 0) to provide a natural and concise instruction."""},
@@ -254,7 +254,7 @@ def process_natural_command(data_file):
 def convert_to_python_list(data_string):
     # Remove any leading or trailing whitespace
     data_string = data_string.strip().replace("“", "\"").replace("”", "\"").replace("‘", "'").replace("’", "'")
-    
+
     # If the string is already a valid Python literal, use ast.literal_eval to convert it
     try:
         python_list = ast.literal_eval(data_string)
@@ -263,14 +263,14 @@ def convert_to_python_list(data_string):
         # Remove brackets and split the string by commas
         elements = re.findall(r'\b\w+\b', data_string)
         python_list = elements
-    
+
     return python_list
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
             description="Train a generative model on bounding boxes"
         )
-    
+
     parser.add_argument(
         "--post_processing",
         action="store_true",
@@ -307,7 +307,7 @@ if __name__ == '__main__':
             scene_data_folder = os.path.join(EDIT_DATA_FOLDER, config['filter_fn'])
             if not os.path.exists(scene_data_folder):
                 raise FileNotFoundError(f"Edit data folder {scene_data_folder} does not exist. Please run edit_data_generator.py first.")
-            
+
             prompt_files = get_llm_command(scene_data_folder, splits=args.splits)
             if len(prompt_files) == 0:
                 print(f"No data found for {room_type}.")
@@ -335,7 +335,6 @@ if __name__ == '__main__':
                 response_save_path = os.path.join(scene_data_folder, f"{file_name.split('.')[0]}_response.jsonl")
                 with open(response_save_path, "wb") as f:
                     f.write(response.content)
-                
+
                 process_natural_command(response_save_path)
                 print(f"Processed {file_name} and saved to {response_save_path}")
-        
