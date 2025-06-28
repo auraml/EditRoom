@@ -44,7 +44,7 @@ Dataset used in EditRoom is based on [3D-FORNT](https://tianchi.aliyun.com/speci
 First, downloading the preprocessed datasets. They will be downloaded under `datasets` folder by default. If you want to change to another directory, please remind to chage environment viariable `EDITROOM_DATA_FOLDER`.
 ```bash
 export EDITROOM_DATA_FOLDER="./datasets"
-python3 tools/download_dataset.py
+PYTHONPATH=. python3 tools/download_dataset.py
 ```
 
 Then, please refer to [tools/README.md](./tools/README.md) for more details.
