@@ -330,9 +330,7 @@ class ThreedFront(BaseDataset):
     def load_from_folder(cls, folder_path, path_to_train_stats=None):
         scenes = []
         for file in tqdm(Path(folder_path).glob("*.pkl"), desc="Loading scenes"):
-            # with open(os.path.join(folder_path, file), "rb") as f:
-            #     scenes.append(pickle.load(f))
-            scene_path = os.path.join(folder_path, file)
+            scene_path = os.path.join(folder_path, file.name)
             scenes.append(scene_path)
         return cls(scenes, path_to_train_stats=path_to_train_stats)
     

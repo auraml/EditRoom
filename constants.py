@@ -20,7 +20,7 @@ print(
     "If you want to change the path, set the EDITROOM_DATA_FOLDER environment variable."
 )
 
-# API Keys and Paths for single scene editing
+# Place API Keys and Blender path here
 
 BLENDER_PATH = os.getenv("BLENDER_PATH", "./blender/blender-3.3.1-linux-x64/blender")
 

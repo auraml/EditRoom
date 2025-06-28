@@ -31,6 +31,7 @@ pip install -r requirements.txt
 
 Download the Blender software for visualization.
 ```bash
+mkdir -p blender
 cd blender
 wget https://download.blender.org/release/Blender3.3/blender-3.3.1-linux-x64.tar.xz
 tar -xvf blender-3.3.1-linux-x64.tar.xz
@@ -55,7 +56,7 @@ However, both `objfeat_vqvae` and `preprocess` folders need to be directly under
 
 ```bash
 # Move objfeat_vqvae folder to datasets/
-mv datasets/data2/kzheng31/EditRoom_Public/objfeat_vqvae datasets/
+mv datasets/data2/kzheng31/EditRoom_Public/editroom_dataset/objfeat_vqvae datasets/
 # Move preprocess folder to datasets/
 mv datasets/data2/zhengkz/3D_datasets/preprocess datasets/
 

@@ -20,7 +20,7 @@ training:
     splits: ["train", "val"]
     epochs: 300
     steps_per_epoch: 500
-    batch_size: 1024
+    batch_size: 256
     save_frequency: 10
     log_frequency: 1
     optimizer:
