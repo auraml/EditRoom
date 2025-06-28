@@ -47,6 +47,24 @@ export EDITROOM_DATA_FOLDER="./datasets"
 python3 tools/download_dataset.py
 ```
 
+**Note:** After executing this command, the following files will be automatically unzipped:
+- `datasets/objfeat_vqvae.zip` will be unzipped to `datasets/data2/kzheng31/EditRoom_Public/objfeat_vqvae` 
+- `datasets/preprocess.zip` will be unzipped to `datasets/data2/zhengkz/3D_datasets/preprocess`
+
+However, both `objfeat_vqvae` and `preprocess` folders need to be directly under the `datasets` folder to comply with the required directory structure. Please run the following commands from the root directory to move them to the correct locations:
+
+```bash
+# Move objfeat_vqvae folder to datasets/
+mv datasets/data2/kzheng31/EditRoom_Public/objfeat_vqvae datasets/
+# Move preprocess folder to datasets/
+mv datasets/data2/zhengkz/3D_datasets/preprocess datasets/
+
+# Verify the folders are in the correct locations
+ls -la datasets/objfeat_vqvae
+ls -la datasets/preprocess
+
+```
+
 Then, please refer to [tools/README.md](./tools/README.md) for more details.
 
 #### Required Directory Structure
