@@ -19,3 +19,4 @@ wandb
 openai
 accelerate
 huggingface_hub
+python-dotenv

@@ -1,4 +1,6 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 EDITROOM_DATA_FOLDER = os.getenv("EDITROOM_DATA_FOLDER", "./datasets")
 print(
@@ -21,7 +23,7 @@ print(
 )
 
 # Place API Keys and Blender path here
-
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
 BLENDER_PATH = os.getenv("BLENDER_PATH", "./blender/blender-3.3.1-linux-x64/blender")
 
 print(
