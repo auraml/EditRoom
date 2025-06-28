@@ -44,7 +44,7 @@ Dataset used in EditRoom is based on [3D-FORNT](https://tianchi.aliyun.com/speci
 First, downloading the preprocessed datasets. They will be downloaded under `datasets` folder by default. If you want to change to another directory, please remind to chage environment viariable `EDITROOM_DATA_FOLDER`.
 ```bash
 export EDITROOM_DATA_FOLDER="./datasets"
-python3 tools/download_dataset.py
+PYTHONPATH=. python3 tools/download_dataset.py
 ```
 
 **Note:** After executing this command, the following files will be automatically unzipped:
@@ -223,7 +223,7 @@ This will download trained checkpoints from Hugging Face to the `./weights` dire
 
 ### Running Inference
 
-This guide shows how to use the `infer.py` script for interactive 3D scene editing.
+This guide shows how to use the `infer.py` script for interactive 3D scene editing. `infer.py` can be run directly after `weights_download.py` and edit pair creation by `edit_data_generator`
 
 #### Script Arguments
 
@@ -300,10 +300,11 @@ Results are saved in timestamped folders under the output directory:
 
 #### Requirements
 
-- Valid OpenAI API key (set as `OPENAI_API_KEY` environment variable)
+- Valid OpenAI API key (set as `OPENAI_API_KEY` environment variable inside `constants.py`)
 - Preprocessed 3D-FRONT dataset with VQ features
 - Trained model weights for scene graph and scene generation
 - Blender installation as per EditRoom author guidelines (for rendering)
+- SRC_SCENE_ID must be present in either train or test folders under `./datasets/editroom_dataset/threed_front_{room_type}/`
 
 ## Acknowledgement
 We would like to thank the authors of [ATISS](https://github.com/nv-tlabs/ATISS), [DiffuScene](https://github.com/tangjiapeng/DiffuScene), [OpenShape](https://github.com/Colin97/OpenShape_code), [NAP](https://arxiv.org/abs/2305.16315), [CLIPLayout](https://arxiv.org/abs/2303.03565) and [InstructScene](https://arxiv.org/abs/2402.04717) for their great work and generously providing source codes, which inspired our work and helped us a lot in the implementation.
